@@ -75,7 +75,7 @@ def run_trading_cycle():
             print(f"[SAFE_MODE_STALE_WORKER] {worker} congelado! Último sinal há {current_time - last_hb}s.")
             print("      -> ABORTANDO CICLO PREVENTIVAMENTE. O worker morreu silenciosamente?")
             print("="*60 + "\n")
-            return
+            return False
     # ---------------------------------------------------------
     
     # 1. Construir o Payload Determinístico
@@ -90,7 +90,7 @@ def run_trading_cycle():
             f"{payload.get('found_klines', 'unknown')}/{payload.get('required_klines', 'unknown')} "
             f"para {payload.get('asset', 'unknown')} {payload.get('timeframe', 'unknown')}"
         )
-        return
+        return False
         
     print(f"      -> Preço Atual: R${payload['technical_context']['current_price']:.2f}")
     data_health = payload.get("data_health", {})
@@ -113,7 +113,7 @@ def run_trading_cycle():
         print("      -> LLM nao consultado. HOLD tecnico auditado.")
         audit_hold_without_llm(payload, reason)
         print("="*60 + "\n")
-        return
+        return False
 
     if has_llm_api_key():
         print("[2/4] Consultando Decision Agent (LLM)...")
@@ -215,6 +215,7 @@ def run_trading_cycle():
         
     conn.close()
     print("="*60 + "\n")
+    return True
 
 if __name__ == "__main__":
     run_trading_cycle()

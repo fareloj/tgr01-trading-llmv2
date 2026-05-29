@@ -38,13 +38,23 @@ def start_paper_trading(cycles: int = 4320, sleep_seconds: int = 60, backup: boo
 
     last_backup_time = time.time()
 
+    completed_cycles = 0
+
     for i in range(cycles):
         print(f"\n--- PAPER TRADING CICLO {i + 1}/{cycles} ---")
         try:
-            run_trading_cycle()
+            cycle_completed = run_trading_cycle()
         except Exception as e:
             print(f"[FATAL] Falha no orquestrador: {type(e).__name__}: {e}")
             print("Tentando sobreviver para o proximo ciclo...")
+            cycle_completed = False
+
+        if cycle_completed is False:
+            print("[BLOQUEADO] Ciclo abortou em preflight/safe mode. Encerrando paper trading para evitar repeticao com dados ruins.")
+            print("Sugestao: reinicie os workers, aguarde 30-60s e rode o preflight antes de tentar novamente.")
+            break
+
+        completed_cycles += 1
 
         if backup and time.time() - last_backup_time >= 21600:
             backup_db()
@@ -54,7 +64,10 @@ def start_paper_trading(cycles: int = 4320, sleep_seconds: int = 60, backup: boo
             print(f"Aguardando {sleep_seconds} segundos para o proximo ciclo de mercado...")
             time.sleep(sleep_seconds)
 
-    print("\n>>> PAPER TRADING COMPLETADO COM SUCESSO! <<<")
+    if completed_cycles == cycles:
+        print("\n>>> PAPER TRADING COMPLETADO COM SUCESSO! <<<")
+    else:
+        print(f"\n>>> PAPER TRADING INTERROMPIDO: {completed_cycles}/{cycles} ciclos completos. <<<")
 
 
 def parse_args():
