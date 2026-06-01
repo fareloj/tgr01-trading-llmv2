@@ -1,4 +1,5 @@
 import argparse
+import json
 import sqlite3
 from pathlib import Path
 
@@ -47,6 +48,111 @@ def scoped_where(since_id: int | None) -> tuple[str, tuple]:
     if since_id is None:
         return "", ()
     return "WHERE id >= ?", (since_id,)
+
+
+def has_column(cursor, table: str, column: str) -> bool:
+    cursor.execute(f"PRAGMA table_info({table})")
+    return column in {row["name"] for row in cursor.fetchall()}
+
+
+def load_snapshot(raw_snapshot: str | None) -> dict | None:
+    if not raw_snapshot:
+        return None
+    try:
+        return json.loads(raw_snapshot)
+    except json.JSONDecodeError:
+        return None
+
+
+def print_snapshot_summary(cursor, where_clause: str, where_params: tuple, limit: int):
+    if not has_column(cursor, "trade_logs", "payload_snapshot_json"):
+        print("\nSnapshots de payload")
+        print("  (coluna ausente; rode init_db para aplicar a migracao)")
+        return
+
+    cursor.execute(
+        f"""
+        SELECT id, payload_snapshot_json
+        FROM trade_logs
+        {where_clause}
+        ORDER BY id DESC
+        """,
+        where_params,
+    )
+    rows = cursor.fetchall()
+    snapshots = []
+    without_snapshot = 0
+    for row in rows:
+        snapshot = load_snapshot(row["payload_snapshot_json"])
+        if snapshot is None:
+            without_snapshot += 1
+            continue
+        snapshots.append((row["id"], snapshot))
+
+    print_table(
+        "Cobertura de snapshots",
+        [
+            {
+                "with_snapshot": len(snapshots),
+                "without_snapshot": without_snapshot,
+            }
+        ],
+    )
+
+    health_counts = {}
+    term_counts = {}
+    for _, snapshot in snapshots:
+        health = snapshot.get("data_health", {})
+        news_risk = snapshot.get("news_risk", {})
+        key = (
+            bool(health.get("is_market_data_stale")),
+            bool(health.get("is_news_stale")),
+            bool(news_risk.get("has_negative_red_flag")),
+            news_risk.get("risk_level", "UNKNOWN"),
+        )
+        health_counts[key] = health_counts.get(key, 0) + 1
+        for term in news_risk.get("matched_terms", []):
+            term_counts[term] = term_counts.get(term, 0) + 1
+
+    print_table(
+        "Data health e news risk nos snapshots",
+        [
+            {
+                "market_stale": key[0],
+                "news_stale": key[1],
+                "news_red_flag": key[2],
+                "risk_level": key[3],
+                "count": count,
+            }
+            for key, count in sorted(health_counts.items(), key=lambda item: item[1], reverse=True)
+        ],
+    )
+    print_table(
+        "Termos negativos nos snapshots",
+        [{"term": term, "count": count} for term, count in sorted(term_counts.items(), key=lambda item: item[1], reverse=True)],
+    )
+
+    compact_rows = []
+    for log_id, snapshot in snapshots[: min(limit, 5)]:
+        technical = snapshot.get("technical", {})
+        health = snapshot.get("data_health", {})
+        news_risk = snapshot.get("news_risk", {})
+        portfolio = snapshot.get("portfolio", {})
+        compact_rows.append(
+            {
+                "id": log_id,
+                "price": technical.get("current_price"),
+                "rsi": f"{technical.get('rsi_value')} {technical.get('rsi_status')}",
+                "macd": f"{technical.get('macd_histogram')} {technical.get('macd_status')}",
+                "atr": technical.get("volatility_atr"),
+                "kline_age": health.get("kline_age_seconds"),
+                "news_age": health.get("news_age_seconds"),
+                "news_risk": news_risk.get("risk_level"),
+                "matched_terms": news_risk.get("matched_terms", []),
+                "exposure_pct": portfolio.get("current_exposure_percentage"),
+            }
+        )
+    print_table("Ultimos snapshots compactos", compact_rows)
 
 
 def analyze(db_path: Path, limit: int, since_id: int | None = None):
@@ -158,6 +264,8 @@ def analyze(db_path: Path, limit: int, since_id: int | None = None):
             where_params + (limit,),
         ),
     )
+
+    print_snapshot_summary(cursor, where_clause, where_params, limit)
 
     portfolio = fetch_rows(cursor, "SELECT currency, amount FROM virtual_portfolio ORDER BY currency")
     print_table("Portfolio virtual", portfolio)

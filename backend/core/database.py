@@ -70,9 +70,11 @@ def init_db():
             final_confidence REAL,
             executed_size REAL,
             execution_price REAL,
-            reasoning TEXT
+            reasoning TEXT,
+            payload_snapshot_json TEXT
         )
     ''')
+    _add_column_if_missing(cursor, "trade_logs", "payload_snapshot_json", "TEXT")
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS virtual_portfolio (
@@ -95,6 +97,14 @@ def init_db():
     conn.commit()
     conn.close()
     print(f"[OK] Banco de dados inicializado em {DB_PATH}")
+
+
+def _add_column_if_missing(cursor, table: str, column: str, definition: str):
+    """Apply a small backward-compatible SQLite migration."""
+    cursor.execute(f"PRAGMA table_info({table})")
+    columns = {row["name"] for row in cursor.fetchall()}
+    if column not in columns:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def get_db_diagnostics() -> dict:
