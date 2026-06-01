@@ -11,6 +11,7 @@ sys.path.append(str(BASE_DIR))
 from features.payload_builder import build_agent_payload
 from agents.decision_agent import DecisionAgent, has_llm_api_key
 from risk.risk_manager import RiskManager
+from core.audit import serialize_payload_snapshot
 from core.database import get_connection, get_db_path, init_db, print_db_diagnostics
 
 load_dotenv()
@@ -21,8 +22,8 @@ def audit_hold_without_llm(payload: dict, reason: str):
     try:
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO trade_logs (timestamp, llm_action, llm_reasoning, action, llm_conviction, system_reliability, final_confidence, executed_size, execution_price, reasoning)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO trade_logs (timestamp, llm_action, llm_reasoning, action, llm_conviction, system_reliability, final_confidence, executed_size, execution_price, reasoning, payload_snapshot_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             int(time.time()),
             "SKIPPED",
@@ -34,6 +35,7 @@ def audit_hold_without_llm(payload: dict, reason: str):
             0.0,
             payload.get("technical_context", {}).get("current_price", 0.0),
             reason,
+            serialize_payload_snapshot(payload),
         ))
         conn.commit()
     finally:
@@ -159,8 +161,8 @@ def run_trading_cycle():
     sys_rel = rm.calculate_system_reliability(payload)
     
     cursor.execute('''
-        INSERT INTO trade_logs (timestamp, llm_action, llm_reasoning, action, llm_conviction, system_reliability, final_confidence, executed_size, execution_price, reasoning)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO trade_logs (timestamp, llm_action, llm_reasoning, action, llm_conviction, system_reliability, final_confidence, executed_size, execution_price, reasoning, payload_snapshot_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         int(time.time()),
         llm_decision.action,
@@ -171,7 +173,8 @@ def run_trading_cycle():
         (llm_decision.conviction / 100.0) * sys_rel,
         final_order["executed_size"],
         payload['technical_context']['current_price'],
-        final_order["reason"]
+        final_order["reason"],
+        serialize_payload_snapshot(payload),
     ))
     conn.commit()
 

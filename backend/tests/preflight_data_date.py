@@ -8,6 +8,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
 from core.database import get_connection, get_db_path, init_db, print_db_diagnostics
+from core.clock_sync import check_clock_skew
 
 
 def local_date(timestamp: int) -> str:
@@ -83,6 +84,8 @@ def run_preflight(
     require_news_today: bool,
     max_kline_age_seconds: int,
     require_workers: bool,
+    require_clock_sync: bool,
+    max_clock_skew_seconds: int,
 ):
     init_db()
     print_db_diagnostics()
@@ -91,6 +94,26 @@ def run_preflight(
     today = local_date(now)
     print(f"[DATE] Hoje local: {today}")
     print(f"[DB] Path: {get_db_path()}")
+
+    clock = check_clock_skew(max_skew_seconds=max_clock_skew_seconds)
+    if clock["status"] == "UNAVAILABLE":
+        message = "Nao foi possivel validar clock skew via HTTP."
+        if require_clock_sync:
+            return fail(message)
+        warn(message)
+    else:
+        print(
+            "[CLOCK] "
+            f"skew={clock['skew_seconds']}s "
+            f"tolerance={clock['max_skew_seconds']}s "
+            f"status={clock['status']}"
+        )
+        if not clock["is_within_tolerance"]:
+            return fail(
+                f"Clock skew detectado: {clock['skew_seconds']}s. "
+                "Sincronize o relogio do Windows antes de rodar pipeline."
+            )
+        ok("Relogio local validado por fontes HTTP.")
 
     latest_kline = fetch_latest_kline(asset, timeframe)
     if latest_kline is None:
@@ -160,6 +183,8 @@ def parse_args():
     parser.add_argument("--require-news-today", action="store_true")
     parser.add_argument("--require-workers", action="store_true")
     parser.add_argument("--max-kline-age-seconds", type=int, default=300)
+    parser.add_argument("--require-clock-sync", action="store_true")
+    parser.add_argument("--max-clock-skew-seconds", type=int, default=300)
     return parser.parse_args()
 
 
@@ -172,5 +197,7 @@ if __name__ == "__main__":
             require_news_today=args.require_news_today,
             max_kline_age_seconds=args.max_kline_age_seconds,
             require_workers=args.require_workers,
+            require_clock_sync=args.require_clock_sync,
+            max_clock_skew_seconds=args.max_clock_skew_seconds,
         )
     )

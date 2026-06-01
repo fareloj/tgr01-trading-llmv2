@@ -38,3 +38,7 @@ Thumbs.db
 # Local generated files
 *.log
 *.tmp
+
+# Node/Electron
+node_modules/
+desktop/dist/

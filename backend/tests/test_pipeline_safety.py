@@ -1,5 +1,7 @@
 import os
+import json
 import shutil
+import sqlite3
 import sys
 import tempfile
 import time
@@ -14,7 +16,8 @@ from core import database
 from agents.contracts import DecisionOutput
 from agents.decision_agent import load_api_keys, parse_retry_seconds, replace_generic_hold_reason
 from features.payload_builder import build_agent_payload, build_news_risk
-from main import is_llm_technical_failure
+from core.audit import build_payload_snapshot
+from main import audit_hold_without_llm, is_llm_technical_failure
 from risk.risk_manager import RiskManager
 
 
@@ -413,3 +416,81 @@ def test_load_api_keys_supports_list_and_numbered_vars(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY_2", "key_2")
 
     assert load_api_keys() == ["key_a", "key_b", "key_single", "key_1", "key_2"]
+
+
+def test_payload_snapshot_keeps_auditable_fields():
+    payload = _compatible_payload()
+    payload["technical_context"]["rsi"] = {"value": 31.5, "status": "OVERSOLD"}
+    payload["technical_context"]["macd"] = {"histogram": -20.2, "status": "BEARISH_EXPANDING"}
+    payload["data_health"]["kline_age_seconds"] = 50
+    payload["data_health"]["news_age_seconds"] = 600
+    payload["news_risk"] = {
+        "has_negative_red_flag": True,
+        "risk_level": "ELEVATED",
+        "matched_terms": ["hack"],
+        "matched_headlines": [{"headline": "Exchange hack report", "source": "pytest", "matched_terms": ["hack"]}],
+    }
+
+    snapshot = build_payload_snapshot(payload)
+
+    assert snapshot["schema_version"] == 1
+    assert snapshot["technical"]["rsi_status"] == "OVERSOLD"
+    assert snapshot["technical"]["macd_status"] == "BEARISH_EXPANDING"
+    assert snapshot["data_health"]["kline_age_seconds"] == 50
+    assert snapshot["news_risk"]["matched_terms"] == ["hack"]
+
+
+def test_init_db_migrates_existing_trade_logs_snapshot_column():
+    original_db_path = database.DB_PATH
+    temp_dir = Path(tempfile.mkdtemp(prefix="tgr01_pytest_"))
+    try:
+        database.DB_PATH = (temp_dir / "trading_v2_test.db").resolve()
+        conn = sqlite3.connect(database.DB_PATH)
+        try:
+            conn.execute(
+                """
+                CREATE TABLE trade_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp INTEGER NOT NULL,
+                    action TEXT NOT NULL
+                )
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        database.init_db()
+        conn = database.get_connection()
+        try:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(trade_logs)").fetchall()}
+        finally:
+            conn.close()
+
+        assert "payload_snapshot_json" in columns
+    finally:
+        database.DB_PATH = original_db_path
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_pre_llm_hold_audit_stores_payload_snapshot():
+    original_db_path = database.DB_PATH
+    temp_dir = Path(tempfile.mkdtemp(prefix="tgr01_pytest_"))
+    try:
+        database.DB_PATH = (temp_dir / "trading_v2_test.db").resolve()
+        database.init_db()
+
+        audit_hold_without_llm(_compatible_payload(), "Pre-LLM abort: market data stale.")
+
+        conn = database.get_connection()
+        try:
+            row = conn.execute("SELECT payload_snapshot_json FROM trade_logs LIMIT 1").fetchone()
+        finally:
+            conn.close()
+
+        snapshot = json.loads(row["payload_snapshot_json"])
+        assert snapshot["technical"]["current_price"] == 40000
+        assert snapshot["data_health"]["is_market_data_stale"] is False
+    finally:
+        database.DB_PATH = original_db_path
+        shutil.rmtree(temp_dir, ignore_errors=True)

@@ -71,6 +71,8 @@ Mercado Bitcoin read-only price data
 - OpenAI-compatible API client
 - Groq
 - Optional OpenRouter/DeepSeek experiments
+- Textual TUI
+- React + Vite + Electron operations console
 - Mercado Bitcoin read-only data
 - RSS news ingestion
 - Windows `.bat` operational scripts
@@ -83,6 +85,8 @@ backend/
     contracts.py              # Pydantic decision schema
     decision_agent.py         # LLM Decision Agent
   core/
+    audit.py                  # compact payload snapshots for each decision
+    clock_sync.py             # HTTP clock-skew verification
     database.py               # SQLite path, schema, diagnostics
   data/
     price_worker.py           # Mercado Bitcoin price ingestion
@@ -94,6 +98,12 @@ backend/
     payload_builder.py        # LLM-ready payload
   risk/
     risk_manager.py           # deterministic gates, cooldown, Kelly
+  ops/
+    commands.py               # allowlisted operational commands
+    run_action.py             # safe shared runner for TUI and Electron
+    run_experiment.py         # isolated long-run paper experiments
+  rag/
+    rag_store.py              # safe local retrieval memory scaffold
   tests/
     run_paper_trading.py      # paper trading runner
     run_20_cycles.py          # temp-DB smoke run
@@ -102,18 +112,42 @@ backend/
     llm_review_decisions.py   # LLM review of deterministic reports
     compare_llm_models.py     # A/B model comparison
     preflight_data_date.py    # strict data freshness preflight
+    analyze_entry_decisions.py# approved/blocked entry report
+    dashboard_state.py        # SQLite-derived JSON for the ops console
     clean_mock_news.py        # controlled mock-news cleaner
     seed_historical_data.py   # manual historical bootstrap
     test_*.py                 # pytest safety tests
   main.py                     # orchestrator cycle
   requirements.txt
 
-run_tgr01.bat                 # operational menu
+run_tgr01.bat                 # launches the Python operational TUI
+run_tgr01_tui.bat             # direct TUI launcher
+run_tgr01_legacy.bat          # fallback batch menu
 run_100_eval.bat              # 100-cycle experiment + reports
 run_pipeline_debug.bat        # debug helper
+desktop/                      # Electron operational console
 
 *.md                          # architecture, plan, study and review docs
 ```
+
+## Desktop Ops Console
+
+The optional Electron interface is a thin operational panel over the Python
+CLI. It does not duplicate trading rules or bypass Risk Manager gates.
+
+```powershell
+cd .\desktop
+npm install
+npm run dev
+```
+
+The console exposes strict preflight, paper runs, clean SQLite audit views,
+entry-specific reports and future-movement evaluation. The dashboard also
+shows worker health, candle/news age, clock skew and paper exposure.
+
+Electron actions go through an explicit allowlist in `backend/ops/commands.py`.
+The interface cannot execute arbitrary shell commands, skip strict preflight,
+or enable real exchange orders.
 
 ## Main Pipeline
 
@@ -127,6 +161,29 @@ run_pipeline_debug.bat        # debug helper
 8. `risk_manager.py` applies deterministic gates, confidence, cooldown and Kelly sizing.
 9. Paper execution simulates portfolio changes.
 10. The cycle is written to `trade_logs`.
+
+## Python Operational TUI
+
+The default Windows launcher opens a Textual terminal interface:
+
+```powershell
+.\run_tgr01.bat
+```
+
+The TUI keeps the operator workflow inside one terminal: worker health, clock
+skew, paper exposure, recent decisions, streamed subprocess output, preflight,
+paper runs and deterministic reports. The original batch menu remains
+available through `run_tgr01_legacy.bat`.
+
+Long experiments can also run without a UI:
+
+```powershell
+python .\backend\ops\run_experiment.py --cycles 100 --sleep 60
+```
+
+This orchestrator performs strict preflight first, records the initial
+`trade_logs.id`, runs paper trading and generates deterministic reports. LLM
+review remains an auxiliary optional step.
 
 ## Safety Model
 
@@ -347,7 +404,7 @@ python .\backend\data\news_worker.py --mode real
 ### 5. Run Strict Preflight
 
 ```powershell
-python .\backend\tests\preflight_data_date.py --strict-workers
+python .\backend\tests\preflight_data_date.py --require-workers
 ```
 
 Only continue when the latest candle is from the current day and fresh.
@@ -368,7 +425,8 @@ Longer experiment:
 
 ## Windows Operational Menu
 
-`run_tgr01.bat` provides a simple menu:
+`run_tgr01.bat` opens the Textual TUI. The original batch menu remains
+available through `run_tgr01_legacy.bat`:
 
 1. SQLite diagnostics
 2. Start real workers in background
@@ -436,13 +494,19 @@ Completed:
 - deterministic report generation;
 - LLM report review;
 - model comparison tooling;
-- prompt hardening against RSI-only BUY.
+- prompt hardening against RSI-only BUY;
+- compact payload snapshots in `trade_logs`;
+- snapshot-aware audit reports;
+- HTTP clock-skew verification;
+- allowlisted operational runner shared by TUI and Electron;
+- Textual terminal interface;
+- Electron operational console;
+- lexical RAG memory scaffold kept outside the order-approval path.
 
 Not completed:
 
 - real trading;
-- RAG/vector database;
-- dashboard;
+- vector embeddings and semantic retrieval;
 - multi-agent production loop;
 - tax/slippage-aware execution;
 - historical backtesting;
@@ -452,11 +516,11 @@ Not completed:
 
 ### Next Steps
 
-- Store compact payload snapshots in `trade_logs`.
 - Add fee/slippage modeling to paper trading.
 - Add explicit ATR status.
 - Add volume status.
 - Improve BUY-approved/BLOCKED reports.
+- Add semantic embeddings behind the safe RAG boundary.
 - Run more 100-cycle experiments with `since-id` isolation.
 
 ### Later
@@ -471,7 +535,9 @@ Not completed:
 
 ## RAG and Vector Database
 
-RAG is intentionally not part of the current critical path.
+The project includes a local lexical RAG scaffold. It is intentionally not
+part of the current trading critical path. Future semantic embeddings must
+remain behind the same safety boundary.
 
 Planned safe use:
 
