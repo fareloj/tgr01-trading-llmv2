@@ -165,7 +165,7 @@ function App() {
         <TopStatus icon={Database} label="Database" value="SQLite" detail="Connected" />
         <TopStatus icon={UsersRound} label="Workers" value={`${healthyWorkers} / 2 Healthy`} />
         <TopStatus icon={Clock3} label="Clock" value={state.clock?.status === "OK" ? "Verified" : "Review"} detail={`Skew: ${state.clock?.skew_seconds ?? "--"}s`} tone={state.clock?.status === "OK" ? "good" : "bad"} />
-        <button className="icon-button" title="Atualizar estado" onClick={refresh}><RefreshCw size={16} /></button>
+        <button className="icon-button" title="Refresh state" aria-label="Refresh state" onClick={refresh}><RefreshCw size={16} /></button>
       </header>
 
       {error && <div className="error-banner">{error}</div>}
@@ -186,7 +186,7 @@ function App() {
             <label>Interval <span className="segmented"><button className={interval === 30 ? "selected" : ""} onClick={() => setIntervalSeconds(30)}>30s</button><button className={interval === 60 ? "selected" : ""} onClick={() => setIntervalSeconds(60)}>60s</button></span></label>
             <button onClick={() => run("preflight")} disabled={running}><ShieldCheck size={14} />Preflight</button>
             <button className="primary" onClick={startPaper} disabled={running}><Play size={14} />Start Paper Run</button>
-            <button className="danger" onClick={() => api.stop()} disabled={!running}><CircleStop size={14} /></button>
+            <button className="danger" title="Stop Paper Run" aria-label="Stop Paper Run" onClick={() => api.stop()} disabled={!running}><CircleStop size={14} /></button>
           </div>
           <div className="progress-line"><span>Progress</span><strong>{running ? activeAction : "Ready"}</strong><i><b style={{ width: running ? "34%" : "0%" }} /></i></div>
           <pre className="terminal">{terminalLines.map((line, index) => <span key={`${index}-${line}`}><em>[OPS]</em> {line}</span>)}</pre>
