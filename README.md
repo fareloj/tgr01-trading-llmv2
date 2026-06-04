@@ -1,10 +1,41 @@
 # TGR-01 Trading LLM V2
 
-TGR-01 Trading LLM V2 is a local, defensive, auditable paper-trading pipeline for BTC/crypto. It uses Python, SQLite, deterministic technical indicators, a strict LLM decision contract, and a deterministic Risk Manager.
+TGR-01 Trading LLM V2 is an experimental crypto trading research console. It
+watches BTC/BRL market data, reads recent crypto news, asks an LLM for a
+structured opinion, and then lets a deterministic Risk Manager decide whether
+that opinion is safe enough to simulate in paper trading.
 
-This is not an "AI magic trading bot". The LLM does not calculate indicators, does not calculate position sizing, and does not execute orders. The system is designed so that uncertainty, stale data, validation errors, and inconsistent signals default to `HOLD`.
+The project is built to answer one practical question:
+
+> Can an LLM help review market context without being trusted blindly with
+> money, math, or execution?
+
+The answer in this repository is deliberately conservative. The LLM can only
+suggest `BUY`, `SELL`, or `HOLD`. Python calculates the indicators, checks data
+freshness, validates the response, applies the risk rules, simulates the paper
+portfolio and records every decision for later review.
+
+This is not an "AI magic trading bot". It is an auditable paper-trading lab
+with safety rails, logs, reports, a terminal TUI and an Electron dashboard.
 
 > Status: experimental paper trading. No real exchange write-access is enabled in this V2.
+
+## What You Can See In This Repo
+
+- a local paper-trading loop for BTC/BRL;
+- a strict LLM decision contract;
+- a deterministic Risk Manager that can override the LLM;
+- worker health checks for price/news collectors;
+- clock and stale-data checks before paper runs;
+- SQLite decision logs with compact market snapshots;
+- deterministic reports for approved, blocked and future-evaluated decisions;
+- a terminal TUI for fast operation;
+- an Electron dashboard for screenshots, monitoring and review;
+- a local RAG/memory scaffold kept outside the order-approval path.
+
+The intended workflow is research-first: run paper trading, inspect what the
+LLM suggested, compare it with the Risk Manager decision, evaluate what the
+market did afterward, and use those reports to improve the system.
 
 ## Core Principles
 
@@ -61,6 +92,28 @@ Mercado Bitcoin read-only price data
               v
         trade_logs audit
 ```
+
+## Interfaces
+
+TGR-01 has two operator-facing interfaces over the same Python pipeline. Both
+are paper-trading oriented and both keep execution behind the deterministic
+preflight and Risk Manager layers.
+
+### Electron Ops Console
+
+![TGR-01 Electron Ops Console](docs/assets/electron-ops-console.png)
+
+The Electron console is the visual operations dashboard. It shows worker
+health, latest candle/news age, clock skew, paper exposure, latest decision
+audit, future-move evaluation and allowlisted pipeline actions.
+
+### Terminal TUI
+
+![TGR-01 Terminal Operational TUI](docs/assets/tui-operational-console.png)
+
+The Textual TUI is the fast terminal workflow. It is useful for quick checks,
+worker/preflight control, paper runs, logs, entry reports and deterministic
+evaluations without leaving the command line.
 
 ## Current Stack
 
