@@ -94,6 +94,10 @@ def init_db():
         )
     ''')
 
+    # Add indexes for frequently queried columns to prevent full table scans
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_news_timestamp ON news(timestamp)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_logs_action_timestamp ON trade_logs(action, timestamp)')
+
     conn.commit()
     conn.close()
     print(f"[OK] Banco de dados inicializado em {DB_PATH}")
