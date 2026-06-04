@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity, BarChart3, Brain, CheckCircle2, CircleStop, Clock3, Database,
-  FileSearch, Gauge, GitBranch, Play, RefreshCw, Settings, ShieldCheck,
-  SlidersHorizontal, TerminalSquare, UsersRound
+  Download, FileSearch, Gauge, GitBranch, Play, RefreshCw, Settings,
+  ShieldCheck, SlidersHorizontal, TerminalSquare, UsersRound
 } from "lucide-react";
 import "./styles.css";
 
@@ -108,6 +108,48 @@ function App() {
   function startPaper() {
     if (cycles === 100) return run(interval === 30 ? "paper100_30" : "paper100");
     return run(interval === 30 ? "paper30" : "paper30_60");
+  }
+
+  function exportEvaluationsCsv() {
+    if (!displayEntries.length) return;
+
+    const headers = ["ID", "Time", "Action", "Entry Price (BRL)", "RSI", "MACD", "ATR", "5m Status", "5m Move %", "15m Status", "15m Move %", "30m Status", "30m Move %", "60m Status", "60m Move %"];
+
+    const rows = displayEntries.map(entry => {
+      const tech = entry.technical || {};
+      const h5 = entry.horizons?.["5"] || {};
+      const h15 = entry.horizons?.["15"] || {};
+      const h30 = entry.horizons?.["30"] || {};
+      const h60 = entry.horizons?.["60"] || {};
+
+      return [
+        entry.id,
+        localTime(entry.timestamp),
+        entry.action || entry.llm_action,
+        entry.execution_price || "",
+        tech.rsi_value ?? "",
+        tech.macd_status || "",
+        tech.volatility_atr ?? "",
+        h5.status || "",
+        h5.move_pct || "",
+        h15.status || "",
+        h15.move_pct || "",
+        h30.status || "",
+        h30.move_pct || "",
+        h60.status || "",
+        h60.move_pct || ""
+      ].join(",");
+    });
+
+    const csvContent = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `evaluations_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 
   useEffect(() => {
@@ -217,7 +259,10 @@ function App() {
       <section className="panel eval-panel">
         <div className="panel-heading">
           <div className="tabs"><b>Approved Orders</b><b>Blocked Orders</b><b className="active">Future Evaluation</b></div>
-          <div className="timeframes">Timeframes: <span>☑ 5m</span><span>☑ 15m</span><span>☑ 30m</span><span>☑ 60m</span></div>
+          <div className="timeframes" style={{ alignItems: "center" }}>
+            Timeframes: <span>☑ 5m</span><span>☑ 15m</span><span>☑ 30m</span><span>☑ 60m</span>
+            <button onClick={exportEvaluationsCsv} disabled={!displayEntries.length} style={{ marginLeft: "8px", padding: "4px 8px" }} title="Export as CSV"><Download size={12} /> Export CSV</button>
+          </div>
         </div>
         <table>
           <thead><tr><th>ID</th><th>Time</th><th>Action</th><th>Entry Price (BRL)</th><th>Context (Indicators)</th><th>5m</th><th>15m</th><th>30m</th><th>60m</th></tr></thead>
