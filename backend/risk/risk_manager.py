@@ -118,17 +118,26 @@ class RiskManager:
             }
 
         executed_size = 0.0
+        max_allowed = payload.get("portfolio_context", {}).get("max_allowed_risk_per_trade", 5.0)
         if action == "BUY":
             raw_size = self.calculate_fractional_kelly(win_rate=0.55, risk_reward_ratio=1.5, fraction=0.5)
-            max_allowed = payload.get("portfolio_context", {}).get("max_allowed_risk_per_trade", 5.0)
             executed_size = min(raw_size, max_allowed)
 
             if executed_size <= 0:
                 return {"action": "HOLD", "reason": "Matematica de Kelly sugere lote nulo ou negativo.", "executed_size": 0.0}
 
+            size_label = f"Tamanho do Kelly: {executed_size:.2f}%"
+
+        if action == "SELL":
+            executed_size = min(max_allowed, current_exposure)
+            if executed_size <= 0:
+                return {"action": "HOLD", "reason": "SELL bloqueado: portfolio sem exposicao em BTC.", "executed_size": 0.0}
+
+            size_label = f"Reducao de exposicao: {executed_size:.2f}%"
+
         return {
             "action": action,
-            "reason": f"Aprovado. Confianca Hibrida: {hybrid_confidence * 100:.1f}%. Tamanho do Kelly: {executed_size:.2f}%",
+            "reason": f"Aprovado. Confianca Hibrida: {hybrid_confidence * 100:.1f}%. {size_label}",
             "executed_size": executed_size,
         }
 

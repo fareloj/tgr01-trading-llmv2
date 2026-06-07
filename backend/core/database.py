@@ -8,6 +8,7 @@ DB_PATH = (BASE_DIR / "trading_v2.db").resolve()
 REQUIRED_TABLES = {
     "klines",
     "news",
+    "paper_position_state",
     "trade_logs",
     "virtual_portfolio",
     "system_health",
@@ -64,6 +65,7 @@ def init_db():
             timestamp INTEGER NOT NULL,
             llm_action TEXT,
             llm_reasoning TEXT,
+            llm_decision_brief TEXT,
             action TEXT NOT NULL,
             llm_conviction REAL,
             system_reliability REAL,
@@ -71,10 +73,37 @@ def init_db():
             executed_size REAL,
             execution_price REAL,
             reasoning TEXT,
-            payload_snapshot_json TEXT
+            payload_snapshot_json TEXT,
+            fee_rate REAL,
+            fee_brl REAL,
+            slippage_rate REAL,
+            expected_price REAL,
+            effective_price REAL,
+            gross_notional_brl REAL,
+            net_notional_brl REAL,
+            brl_delta REAL,
+            btc_delta REAL,
+            equity_before_brl REAL,
+            equity_after_brl REAL,
+            realized_pnl_brl REAL,
+            position_avg_cost_brl REAL
         )
     ''')
+    _add_column_if_missing(cursor, "trade_logs", "llm_decision_brief", "TEXT")
     _add_column_if_missing(cursor, "trade_logs", "payload_snapshot_json", "TEXT")
+    _add_column_if_missing(cursor, "trade_logs", "fee_rate", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "fee_brl", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "slippage_rate", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "expected_price", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "effective_price", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "gross_notional_brl", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "net_notional_brl", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "brl_delta", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "btc_delta", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "equity_before_brl", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "equity_after_brl", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "realized_pnl_brl", "REAL")
+    _add_column_if_missing(cursor, "trade_logs", "position_avg_cost_brl", "REAL")
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS virtual_portfolio (
@@ -86,6 +115,16 @@ def init_db():
 
     cursor.execute('INSERT OR IGNORE INTO virtual_portfolio (currency, amount) VALUES ("BRL", 10000.0)')
     cursor.execute('INSERT OR IGNORE INTO virtual_portfolio (currency, amount) VALUES ("BTC", 0.0)')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS paper_position_state (
+            asset TEXT PRIMARY KEY,
+            quantity REAL NOT NULL DEFAULT 0.0,
+            avg_cost_brl REAL NOT NULL DEFAULT 0.0,
+            realized_pnl_brl REAL NOT NULL DEFAULT 0.0,
+            updated_at INTEGER NOT NULL
+        )
+    ''')
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS system_health (

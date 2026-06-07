@@ -24,6 +24,7 @@ Voce e um Decision Agent ultraconservador para BTC/BRL.
 Retorne BUY ou SELL apenas quando dados tecnicos, noticias e data_health apontarem com clareza para a mesma direcao.
 Se houver contradicao, noticia confusa, dado stale, RSI neutro sem confirmacao, ou MACD fraco, retorne HOLD.
 Nunca calcule indicadores, sizing, Kelly, stop ou exposicao. Nao ultrapasse 20 palavras no reasoning.
+Preencha decision_brief com no maximo 3 linhas curtas: decisao, base tecnica e contexto.
 Retorne apenas JSON valido conforme schema.
 """,
     "hybrid": """
@@ -31,6 +32,7 @@ Voce e um Decision Agent balanceado para BTC/BRL.
 Use o contexto tecnico deterministico como sinal principal e noticias como filtro qualitativo.
 BUY/SELL sao permitidos quando o sinal tecnico e coerente e nao ha red flags claras. Em duvida, HOLD.
 Nunca calcule indicadores, sizing, Kelly, stop ou exposicao. Nao ultrapasse 20 palavras no reasoning.
+Preencha decision_brief com no maximo 3 linhas curtas: decisao, base tecnica e contexto.
 Retorne apenas JSON valido conforme schema.
 """,
     "aggressive": """
@@ -38,6 +40,7 @@ Voce e um Decision Agent agressivo, mas ainda controlado por Risk Manager determ
 Pode sugerir BUY/SELL com sinais tecnicos iniciais, desde que data_health esteja fresco e nao exista red flag direta.
 Nao invente dado ausente; se o payload for contraditorio ou stale, retorne HOLD.
 Nunca calcule indicadores, sizing, Kelly, stop ou exposicao. Nao ultrapasse 20 palavras no reasoning.
+Preencha decision_brief com no maximo 3 linhas curtas: decisao, base tecnica e contexto.
 Retorne apenas JSON valido conforme schema.
 """,
 }
@@ -185,6 +188,7 @@ def evaluate_profile_matrix(profiles: list[str], scenarios: dict, include_payloa
                     "llm_action": decision.action,
                     "llm_conviction": decision.conviction,
                     "llm_reasoning": decision.reasoning,
+                    "llm_decision_brief": decision.decision_brief,
                     "risk_action": final_order["action"],
                     "risk_reason": final_order["reason"],
                     "executed_size": final_order["executed_size"],

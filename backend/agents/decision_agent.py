@@ -81,10 +81,45 @@ def build_specific_hold_reason(payload: dict) -> str:
     return f"HOLD: RSI {rsi_status}; MACD {macd_status}; sem alinhamento direcional."
 
 
+def build_specific_decision_brief(payload: dict, action: str, reasoning: str) -> str:
+    technical = payload.get("technical_context", {})
+    data_health = payload.get("data_health", {})
+    news_risk = payload.get("news_risk", {})
+    portfolio = payload.get("portfolio_context", {})
+
+    rsi = technical.get("rsi", {})
+    macd = technical.get("macd", {})
+    price = technical.get("current_price", "unknown")
+    line_1 = f"Acao {action}: {reasoning}"
+    line_2 = (
+        f"Base tecnica: preco={price}, RSI={rsi.get('value')} {rsi.get('status')}, "
+        f"MACD={macd.get('histogram')} {macd.get('status')}."
+    )
+    line_3 = (
+        f"Contexto: market_stale={data_health.get('is_market_data_stale')}, "
+        f"news_stale={data_health.get('is_news_stale')}, "
+        f"news_risk={news_risk.get('risk_level')}, "
+        f"exposure={portfolio.get('current_exposure_percentage')}%."
+    )
+    return "\n".join([line_1, line_2, line_3])
+
+
 def replace_generic_hold_reason(decision: DecisionOutput, payload: dict) -> DecisionOutput:
     normalized = " ".join(decision.reasoning.strip().lower().rstrip(".").split())
     if decision.action == "HOLD" and normalized in GENERIC_HOLD_REASONS:
-        return decision.model_copy(update={"reasoning": build_specific_hold_reason(payload)})
+        reasoning = build_specific_hold_reason(payload)
+        return decision.model_copy(
+            update={
+                "reasoning": reasoning,
+                "decision_brief": build_specific_decision_brief(payload, decision.action, reasoning),
+            }
+        )
+    if not decision.decision_brief.strip():
+        return decision.model_copy(
+            update={
+                "decision_brief": build_specific_decision_brief(payload, decision.action, decision.reasoning),
+            }
+        )
     return decision
 
 
@@ -154,6 +189,11 @@ class DecisionAgent:
                 action="HOLD",
                 conviction=0,
                 reasoning=f"LLM technical failure: RateLimitCooldown {remaining}s",
+                decision_brief=(
+                    "Acao HOLD: chamada LLM suspensa por rate limit.\n"
+                    f"Base operacional: cooldown restante de {remaining}s.\n"
+                    "Contexto: decisao defensiva para evitar operar sem validacao recente."
+                ),
             )
 
         system_prompt = """
@@ -162,8 +202,12 @@ class DecisionAgent:
         Voce NUNCA opera no escuro. Se as noticias forem confusas ou os indicadores nao mostrarem direcao clara, devolva HOLD.
         NUNCA use reasoning generico como "noticias confusas", "indicadores neutros" ou "sem direcao clara".
         Para HOLD, cite pelo menos dois fatores objetivos: RSI, MACD, news_risk, data_health ou conflito entre sinais.
+        O campo reasoning deve ser curto, com no maximo 20 palavras.
+        O campo decision_brief deve ter no maximo 3 linhas curtas e explicar:
+        1) por que escolheu a acao;
+        2) quais dados tecnicos sustentam a acao;
+        3) quais dados de noticias/saude/exposicao influenciaram a acao.
         RSI OVERSOLD sozinho NAO autoriza BUY. Se MACD estiver BEARISH_EXPANDING ou BEARISH_DIVERGENCE, prefira HOLD.
-        NUNCA ultrapasse 20 palavras no reasoning.
         Voce deve SEMPRE retornar um JSON perfeito respeitando o schema exigido.
         """
 
@@ -212,6 +256,11 @@ class DecisionAgent:
             action="HOLD",
             conviction=0,
             reasoning=format_llm_error(last_error or Exception("UnknownLLMError")),
+            decision_brief=(
+                "Acao HOLD: falha tecnica na chamada ou validacao do LLM.\n"
+                "Base operacional: resposta ausente, invalida, rate limited ou erro de API.\n"
+                "Contexto: decisao defensiva para impedir ordem sem decisao validada."
+            ),
         )
 
 

@@ -32,6 +32,11 @@ def read_json_file(path: Path) -> dict:
         return {}
 
 
+def table_columns(cursor: sqlite3.Cursor, table: str) -> set[str]:
+    cursor.execute(f"PRAGMA table_info({table})")
+    return {row["name"] for row in cursor.fetchall()}
+
+
 def fetch_dashboard_state(db_path: Path, recent_limit: int = 12) -> dict:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -74,12 +79,45 @@ def fetch_dashboard_state(db_path: Path, recent_limit: int = 12) -> dict:
     if "rag_retrieval_logs" in table_names:
         rag["retrievals"] = int(cursor.execute("SELECT COUNT(*) FROM rag_retrieval_logs").fetchone()[0])
 
+    trade_log_columns = table_columns(cursor, "trade_logs")
+    base_log_columns = [
+        "id",
+        "timestamp",
+        "llm_action",
+        "llm_reasoning",
+        "action",
+        "llm_conviction",
+        "system_reliability",
+        "final_confidence",
+        "executed_size",
+        "execution_price",
+        "reasoning",
+        "payload_snapshot_json",
+    ]
+    optional_execution_columns = [
+        "llm_decision_brief",
+        "fee_rate",
+        "fee_brl",
+        "slippage_rate",
+        "expected_price",
+        "effective_price",
+        "gross_notional_brl",
+        "net_notional_brl",
+        "brl_delta",
+        "btc_delta",
+        "equity_before_brl",
+        "equity_after_brl",
+        "realized_pnl_brl",
+        "position_avg_cost_brl",
+    ]
+    selected_log_columns = base_log_columns + [
+        column for column in optional_execution_columns if column in trade_log_columns
+    ]
+
     logs = []
     for row in cursor.execute(
-        """
-        SELECT id, timestamp, llm_action, llm_reasoning, action, llm_conviction,
-               system_reliability, final_confidence, executed_size, execution_price,
-               reasoning, payload_snapshot_json
+        f"""
+        SELECT {", ".join(selected_log_columns)}
         FROM trade_logs
         ORDER BY id DESC
         LIMIT ?

@@ -19,6 +19,11 @@ def load_snapshot(raw: str | None) -> dict:
         return {}
 
 
+def has_column(cursor, table: str, column: str) -> bool:
+    cursor.execute(f"PRAGMA table_info({table})")
+    return column in {row["name"] for row in cursor.fetchall()}
+
+
 def entry_kind(row: sqlite3.Row) -> str:
     if row["action"] in {"BUY", "SELL"}:
         return "approved"
@@ -27,17 +32,25 @@ def entry_kind(row: sqlite3.Row) -> str:
     return "ignored"
 
 
+def evaluation_base_price(row: sqlite3.Row) -> float:
+    if row["action"] in {"BUY", "SELL"} and "effective_price" in row.keys() and row["effective_price"]:
+        return float(row["effective_price"])
+    return float(row["execution_price"] or 0.0)
+
+
 def evaluate_entries(db_path: Path, since_id: int | None, horizons: list[int], threshold_pct: float) -> dict:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     where = "WHERE id >= ?" if since_id is not None else ""
     params = (since_id,) if since_id is not None else ()
+    effective_price_select = ", effective_price" if has_column(cursor, "trade_logs", "effective_price") else ""
     rows = cursor.execute(
         f"""
         SELECT id, timestamp, llm_action, llm_reasoning, action, llm_conviction,
                system_reliability, final_confidence, executed_size, execution_price,
                reasoning, payload_snapshot_json
+               {effective_price_select}
         FROM trade_logs
         {where}
         ORDER BY id ASC
@@ -54,16 +67,18 @@ def evaluate_entries(db_path: Path, since_id: int | None, horizons: list[int], t
         technical = snapshot.get("technical", {})
         item = {key: row[key] for key in row.keys() if key != "payload_snapshot_json"}
         item["kind"] = kind
+        item["evaluation_base_price"] = evaluation_base_price(row)
         item["technical"] = technical
         item["news_risk"] = snapshot.get("news_risk", {})
         item["data_health"] = snapshot.get("data_health", {})
         item["horizons"] = {}
         for horizon in horizons:
             future = fetch_future_price(cursor, int(row["timestamp"]), horizon)
-            if future is None or not row["execution_price"]:
+            base_price = item["evaluation_base_price"]
+            if future is None or not base_price:
                 item["horizons"][str(horizon)] = {"status": "not_matured"}
                 continue
-            move_pct = ((float(future["close"]) - float(row["execution_price"])) / float(row["execution_price"])) * 100.0
+            move_pct = ((float(future["close"]) - base_price) / base_price) * 100.0
             evaluated_action = row["action"] if kind == "approved" else "HOLD"
             item["horizons"][str(horizon)] = {
                 "status": classify(evaluated_action, move_pct, threshold_pct),
@@ -125,7 +140,7 @@ def print_report(report: dict):
         technical = item["technical"]
         print(
             f"  id={item['id']} kind={item['kind']} llm={item['llm_action']} final={item['action']} "
-            f"price={item['execution_price']} rsi={technical.get('rsi_value')} {technical.get('rsi_status')} "
+            f"price={item.get('evaluation_base_price', item['execution_price'])} rsi={technical.get('rsi_value')} {technical.get('rsi_status')} "
             f"macd={technical.get('macd_status')} reason={item['reasoning']}"
         )
         for horizon, result in item["horizons"].items():

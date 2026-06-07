@@ -28,6 +28,7 @@ Voce NUNCA opera no escuro. Se as noticias forem confusas ou os indicadores nao 
 NUNCA use reasoning generico como "noticias confusas", "indicadores neutros" ou "sem direcao clara".
 Para HOLD, cite pelo menos dois fatores objetivos: RSI, MACD, news_risk, data_health ou conflito entre sinais.
 NUNCA ultrapasse 20 palavras no reasoning.
+Preencha decision_brief com no maximo 3 linhas curtas: decisao, base tecnica e contexto de noticias/saude/exposicao.
 Voce deve SEMPRE retornar um JSON perfeito respeitando o schema exigido.
 """
 

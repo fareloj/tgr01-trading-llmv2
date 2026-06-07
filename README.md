@@ -209,7 +209,7 @@ or enable real exchange orders.
 3. SQLite stores candles, news, worker heartbeats, paper portfolio, and trade logs.
 4. `payload_builder.py` builds a compact market context.
 5. `indicators.py` computes RSI, MACD, ATR and qualitative technical states.
-6. `decision_agent.py` asks the LLM for strict JSON: `BUY`, `SELL`, or `HOLD`.
+6. `decision_agent.py` asks the LLM for strict JSON: `BUY`, `SELL`, or `HOLD`, plus a short human-readable evidence brief.
 7. Pydantic validates the LLM response.
 8. `risk_manager.py` applies deterministic gates, confidence, cooldown and Kelly sizing.
 9. Paper execution simulates portfolio changes.
@@ -261,6 +261,11 @@ The LLM may only suggest:
 - `BUY`
 - `SELL`
 - `HOLD`
+
+Alongside the short machine-friendly `reasoning`, the LLM also returns a
+`decision_brief`: up to three compact lines explaining why it chose the action,
+which technical data it used, and which news/data-health/exposure context
+influenced the decision. This is stored in `trade_logs` for human review.
 
 The LLM does not calculate:
 
@@ -332,6 +337,28 @@ The system currently uses a simple deterministic red-flag detector for news term
 
 This is intentionally simple. RAG/vector search is not required for the current version.
 
+## RAG Memory
+
+RAG is an optional memory layer for research and review. It is not an
+order-approval engine.
+
+The current safe RAG workflow can:
+
+- ingest project notes and recent news;
+- store past `trade_logs` as retrievable decision cases;
+- retrieve similar context for human or LLM review after a paper run.
+
+```powershell
+python .\backend\tests\ingest_rag_sources.py --project-docs --news-hours 24 --news-limit 20
+python .\backend\tests\ingest_decision_cases.py --since-id 300 --limit 100
+python .\backend\tests\query_decision_memory.py --trade-log-id 382 --limit 5
+python .\backend\tests\query_decision_memory.py --current-payload --limit 5
+```
+
+The retrieved context is push-only: Python selects it and prints it for review.
+It does not let the LLM query arbitrary memory, and it does not bypass the
+fresh market payload or the deterministic Risk Manager.
+
 ## Paper Trading
 
 Paper trading uses a simulated portfolio stored in SQLite.
@@ -340,13 +367,21 @@ The executor records:
 
 - LLM action;
 - LLM reasoning;
+- LLM decision brief;
 - final action;
 - final Risk Manager reasoning;
 - conviction;
 - system reliability;
 - final confidence;
 - executed size;
-- execution price.
+- reference execution price;
+- effective paper execution price after slippage;
+- fee paid in BRL;
+- gross and net notional;
+- BRL/BTC balance deltas;
+- paper equity before and after execution;
+- realized PnL on sells;
+- average BTC cost basis.
 
 No real order is sent to any exchange.
 
@@ -548,20 +583,25 @@ Completed:
 - LLM report review;
 - model comparison tooling;
 - prompt hardening against RSI-only BUY;
+- three-line LLM decision briefs stored in audit logs;
 - compact payload snapshots in `trade_logs`;
 - snapshot-aware audit reports;
 - HTTP clock-skew verification;
 - allowlisted operational runner shared by TUI and Electron;
 - Textual terminal interface;
 - Electron operational console;
-- lexical RAG memory scaffold kept outside the order-approval path.
+- lexical RAG memory scaffold kept outside the order-approval path;
+- fee/slippage-aware paper execution;
+- average-cost position tracking;
+- realized PnL and immediate equity delta reporting.
 
 Not completed:
 
 - real trading;
 - vector embeddings and semantic retrieval;
 - multi-agent production loop;
-- tax/slippage-aware execution;
+- tax-aware reporting;
+- real exchange execution;
 - historical backtesting;
 - multi-timeframe strategy.
 
@@ -569,7 +609,6 @@ Not completed:
 
 ### Next Steps
 
-- Add fee/slippage modeling to paper trading.
 - Add explicit ATR status.
 - Add volume status.
 - Improve BUY-approved/BLOCKED reports.

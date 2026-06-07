@@ -26,6 +26,7 @@ const previewState = {
       id: 332, timestamp: 1780324960, llm_action: "HOLD", action: "HOLD",
       llm_conviction: 60, system_reliability: 1, final_confidence: .6,
       execution_price: 359984, reasoning: "LLM sugeriu HOLD.", llm_reasoning: "RSI neutro, MACD neutro",
+      llm_decision_brief: "Acao HOLD: RSI neutro e MACD neutro nao sustentam entrada.\nBase tecnica: preco=359984, RSI=32.28 NEUTRAL, MACD=239.7 NEUTRAL.\nContexto: noticias e mercado frescos, news_risk NORMAL.",
       snapshot: {
         technical: { rsi_value: 32.28, rsi_status: "NEUTRAL", macd_histogram: 239.7, macd_status: "NEUTRAL", volatility_atr: 364.64 },
         data_health: { kline_age_seconds: 99, news_age_seconds: 1091, is_market_data_stale: false, is_news_stale: false },
@@ -242,6 +243,10 @@ function App() {
             <div><small>Final Action</small><strong className="warn">{latest.action || "--"}</strong></div>
             <div><small>Reason</small><p>{latest.reasoning || "--"}</p></div>
           </div>
+          <div className="decision-brief">
+            <small>LLM Decision Brief</small>
+            <p>{latest.llm_decision_brief || latest.llm_reasoning || "--"}</p>
+          </div>
           <div className="audit-grid">
             <div><small>RSI (14)</small><strong>{technical.rsi_value ?? "--"}</strong><em>{technical.rsi_status || "--"}</em></div>
             <div><small>MACD</small><strong>{technical.macd_histogram ?? "--"}</strong><em>{technical.macd_status || "--"}</em></div>
@@ -251,6 +256,10 @@ function App() {
             <div><small>Final Confidence</small><strong className="warn">{Math.round((latest.final_confidence || 0) * 100)}%</strong></div>
             <div><small>News Risk</small><strong className={newsRisk.risk_level === "NORMAL" ? "good" : "warn"}>{newsRisk.risk_level || "--"}</strong></div>
             <div><small>Market / News Stale</small><strong>{dataHealth.is_market_data_stale ? "YES" : "NO"} / {dataHealth.is_news_stale ? "YES" : "NO"}</strong></div>
+            <div><small>Effective Price</small><strong>{latest.effective_price ? money(latest.effective_price) : "--"}</strong><em>BRL</em></div>
+            <div><small>Fee / Slippage</small><strong>{latest.fee_brl ? `R$ ${money(latest.fee_brl)}` : "--"}</strong><em>{latest.slippage_rate != null ? `${(latest.slippage_rate * 100).toFixed(3)}%` : "--"}</em></div>
+            <div><small>Equity Delta</small><strong className={(latest.equity_after_brl || 0) >= (latest.equity_before_brl || 0) ? "good" : "bad"}>{latest.equity_after_brl && latest.equity_before_brl ? money(latest.equity_after_brl - latest.equity_before_brl) : "--"}</strong><em>BRL</em></div>
+            <div><small>Realized PnL</small><strong className={(latest.realized_pnl_brl || 0) >= 0 ? "good" : "bad"}>{latest.realized_pnl_brl != null ? money(latest.realized_pnl_brl) : "--"}</strong><em>BRL</em></div>
           </div>
           <footer>Snapshot ID: {latest.id || "--"} <span>kline_age: {seconds(dataHealth.kline_age_seconds)} · news_age: {seconds(dataHealth.news_age_seconds)}</span></footer>
         </article>

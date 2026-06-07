@@ -55,6 +55,12 @@ def has_column(cursor, table: str, column: str) -> bool:
     return column in {row["name"] for row in cursor.fetchall()}
 
 
+def has_columns(cursor, table: str, columns: set[str]) -> bool:
+    cursor.execute(f"PRAGMA table_info({table})")
+    existing = {row["name"] for row in cursor.fetchall()}
+    return columns.issubset(existing)
+
+
 def load_snapshot(raw_snapshot: str | None) -> dict | None:
     if not raw_snapshot:
         return None
@@ -224,6 +230,22 @@ def analyze(db_path: Path, limit: int, since_id: int | None = None):
     )
     print_table("Justificativas LLM mais comuns", llm_reasons)
 
+    if has_column(cursor, "trade_logs", "llm_decision_brief"):
+        print_table(
+            "Resumos humanos LLM recentes",
+            fetch_rows(
+                cursor,
+                f"""
+                SELECT id, llm_action, action, llm_reasoning, llm_decision_brief
+                FROM trade_logs
+                {where_clause}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                where_params + (min(limit, 5),),
+            ),
+        )
+
     cursor.execute(f"SELECT reasoning, llm_reasoning FROM trade_logs {where_clause}", where_params)
     buckets = {}
     for row in cursor.fetchall():
@@ -248,12 +270,63 @@ def analyze(db_path: Path, limit: int, since_id: int | None = None):
         ),
     )
 
+    if has_columns(
+        cursor,
+        "trade_logs",
+        {
+            "fee_brl",
+            "slippage_rate",
+            "effective_price",
+            "equity_before_brl",
+            "equity_after_brl",
+            "realized_pnl_brl",
+        },
+    ):
+        print_table(
+            "Execucao paper: taxas, slippage e PnL",
+            fetch_rows(
+                cursor,
+                f"""
+                SELECT id, action, executed_size, execution_price, effective_price,
+                       ROUND(slippage_rate * 100.0, 4) AS slippage_pct,
+                       fee_brl, gross_notional_brl, net_notional_brl,
+                       brl_delta, btc_delta, realized_pnl_brl,
+                       equity_before_brl, equity_after_brl,
+                       ROUND(equity_after_brl - equity_before_brl, 4) AS immediate_equity_delta_brl
+                FROM trade_logs
+                WHERE action IN ('BUY', 'SELL')
+                {"AND id >= ?" if since_id is not None else ""}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                ((since_id,) if since_id is not None else ()) + (limit,),
+            ),
+        )
+
+        execution_summary = fetch_rows(
+            cursor,
+            f"""
+            SELECT
+                COUNT(*) AS executed_orders,
+                COALESCE(SUM(fee_brl), 0.0) AS total_fees_brl,
+                COALESCE(SUM(realized_pnl_brl), 0.0) AS realized_pnl_brl,
+                COALESCE(AVG(slippage_rate) * 100.0, 0.0) AS avg_slippage_pct
+            FROM trade_logs
+            WHERE action IN ('BUY', 'SELL')
+            {"AND id >= ?" if since_id is not None else ""}
+            """,
+            ((since_id,) if since_id is not None else ()),
+        )
+        print_table("Resumo de execucao paper", execution_summary)
+
     print_table(
         "Ultimos logs",
         fetch_rows(
             cursor,
             f"""
-            SELECT id, timestamp, llm_action, llm_reasoning, action, llm_conviction,
+            SELECT id, timestamp, llm_action, llm_reasoning,
+                   {"llm_decision_brief," if has_column(cursor, "trade_logs", "llm_decision_brief") else ""}
+                   action, llm_conviction,
                    system_reliability, final_confidence, executed_size,
                    execution_price, reasoning
             FROM trade_logs

@@ -39,7 +39,12 @@ def test_llm_malicioso():
     """LLM Alucinando / Output quebrado."""
     try:
         # Força o Pydantic a engolir um JSON alucinado.
-        DecisionOutput(action="COMPRA_TUDO", conviction=1000, reasoning="To the moon!") # type: ignore
+        DecisionOutput(
+            action="COMPRA_TUDO",
+            conviction=1000,
+            reasoning="To the moon!",
+            decision_brief="Acao invalida.\nBase invalida.\nContexto invalido.",
+        ) # type: ignore
         assert False, "O Pydantic aceitou lixo!"
     except Exception as e:
         print("[PASS] Chaos Monkey: LLM Malicioso ou JSON Inválido contido pela tipagem estrita.")

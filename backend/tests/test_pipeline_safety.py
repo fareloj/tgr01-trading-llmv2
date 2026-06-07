@@ -372,17 +372,29 @@ def test_directional_gate_blocks_buy_with_news_red_flag():
 def test_generic_llm_hold_reason_is_replaced_with_specific_payload_reason():
     payload = _compatible_payload()
     payload["technical_context"]["macd"]["status"] = "BEARISH_EXPANDING"
-    decision = DecisionOutput(action="HOLD", conviction=50, reasoning="Noticias confusas")
+    decision = DecisionOutput(
+        action="HOLD",
+        conviction=50,
+        reasoning="Noticias confusas",
+        decision_brief="Acao HOLD.\nBase tecnica generica.\nContexto generico.",
+    )
 
     updated = replace_generic_hold_reason(decision, payload)
 
     assert updated.action == "HOLD"
     assert updated.reasoning == "HOLD: RSI NEUTRAL; MACD BEARISH_EXPANDING; sem alinhamento direcional."
+    assert "MACD=BERISH" not in updated.decision_brief
+    assert "BEARISH_EXPANDING" in updated.decision_brief
 
 
 def test_specific_llm_hold_reason_is_preserved():
     payload = _compatible_payload()
-    decision = DecisionOutput(action="HOLD", conviction=50, reasoning="HOLD: RSI NEUTRAL; MACD BEARISH_EXPANDING.")
+    decision = DecisionOutput(
+        action="HOLD",
+        conviction=50,
+        reasoning="HOLD: RSI NEUTRAL; MACD BEARISH_EXPANDING.",
+        decision_brief="Acao HOLD.\nBase tecnica: RSI NEUTRAL e MACD BEARISH_EXPANDING.\nContexto: sinais mistos.",
+    )
 
     updated = replace_generic_hold_reason(decision, payload)
 
@@ -390,13 +402,23 @@ def test_specific_llm_hold_reason_is_preserved():
 
 
 def test_llm_technical_failure_is_distinguished_from_analytical_hold():
-    decision = DecisionOutput(action="HOLD", conviction=0, reasoning="LLM technical failure: RateLimitError")
+    decision = DecisionOutput(
+        action="HOLD",
+        conviction=0,
+        reasoning="LLM technical failure: RateLimitError",
+        decision_brief="Acao HOLD.\nBase operacional: RateLimitError.\nContexto: sem validacao LLM.",
+    )
 
     assert is_llm_technical_failure(decision) is True
 
 
 def test_zero_conviction_analytical_hold_is_not_technical_failure():
-    decision = DecisionOutput(action="HOLD", conviction=0, reasoning="HOLD: RSI NEUTRAL; MACD NEUTRAL.")
+    decision = DecisionOutput(
+        action="HOLD",
+        conviction=0,
+        reasoning="HOLD: RSI NEUTRAL; MACD NEUTRAL.",
+        decision_brief="Acao HOLD.\nBase tecnica: RSI NEUTRAL e MACD NEUTRAL.\nContexto: sem direcao.",
+    )
 
     assert is_llm_technical_failure(decision) is False
 
@@ -468,6 +490,7 @@ def test_init_db_migrates_existing_trade_logs_snapshot_column():
             conn.close()
 
         assert "payload_snapshot_json" in columns
+        assert "llm_decision_brief" in columns
     finally:
         database.DB_PATH = original_db_path
         shutil.rmtree(temp_dir, ignore_errors=True)

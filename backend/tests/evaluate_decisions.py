@@ -17,6 +17,17 @@ def fetch_rows(cursor, query: str, params: tuple = ()):
     return [dict(row) for row in cursor.fetchall()]
 
 
+def has_column(cursor, table: str, column: str) -> bool:
+    cursor.execute(f"PRAGMA table_info({table})")
+    return column in {row["name"] for row in cursor.fetchall()}
+
+
+def evaluation_base_price(row: dict) -> float:
+    if row.get("action") in {"BUY", "SELL"} and row.get("effective_price"):
+        return float(row["effective_price"])
+    return float(row.get("execution_price") or 0.0)
+
+
 def fetch_future_price(cursor, timestamp: int, horizon_minutes: int) -> dict | None:
     target = timestamp + (horizon_minutes * 60)
     cursor.execute(
@@ -67,11 +78,13 @@ def evaluate(db_path: Path, since_id: int | None, horizons: list[int], threshold
 
     where = "WHERE id >= ?" if since_id is not None else ""
     params = (since_id,) if since_id is not None else ()
+    effective_price_select = ", effective_price" if has_column(cursor, "trade_logs", "effective_price") else ""
     rows = fetch_rows(
         cursor,
         f"""
         SELECT id, timestamp, llm_action, llm_reasoning, action, llm_conviction,
                system_reliability, final_confidence, executed_size, execution_price, reasoning
+               {effective_price_select}
         FROM trade_logs
         {where}
         ORDER BY id ASC
@@ -95,8 +108,9 @@ def evaluate(db_path: Path, since_id: int | None, horizons: list[int], threshold
     }
 
     for row in rows:
-        base_price = float(row["execution_price"] or 0.0)
+        base_price = evaluation_base_price(row)
         item = dict(row)
+        item["evaluation_base_price"] = base_price
         item["horizons"] = {}
 
         for horizon in horizons:
@@ -152,7 +166,7 @@ def print_report(report: dict, limit: int):
     for item in report["evaluations"][-limit:]:
         print(
             f"  id={item['id']} action={item['action']} llm={item['llm_action']} "
-            f"price={item['execution_price']} reason={item['reasoning']}"
+            f"price={item.get('evaluation_base_price', item['execution_price'])} reason={item['reasoning']}"
         )
         for horizon, result in item["horizons"].items():
             print(f"    {horizon}m -> {result}")
