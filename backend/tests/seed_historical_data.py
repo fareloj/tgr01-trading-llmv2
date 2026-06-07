@@ -1,7 +1,9 @@
 import argparse
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -11,14 +13,29 @@ sys.path.append(str(BACKEND_DIR))
 from core.database import get_connection, get_db_path, init_db
 
 
-def seed_history(symbol: str = "BTC-BRL", asset: str = "BTC/BRL", timeframe: str = "1m", limit: int = 100):
+LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
+
+
+def parse_local_datetime(value: str) -> int:
+    dt = datetime.strptime(value, "%Y-%m-%d %H:%M")
+    return int(dt.replace(tzinfo=LOCAL_TZ).timestamp())
+
+
+def seed_history(
+    symbol: str = "BTC-BRL",
+    asset: str = "BTC/BRL",
+    timeframe: str = "1m",
+    limit: int = 100,
+    from_ts: int | None = None,
+    to_ts: int | None = None,
+):
     print(f"Iniciando Seed de Historico Real para {symbol}...")
     init_db()
     print(f"[Seed] DB path: {get_db_path()}")
     print(f"[Seed] Asset/timeframe: {asset} {timeframe}")
 
-    to_ts = int(time.time())
-    from_ts = to_ts - (limit * 60)
+    to_ts = int(to_ts or time.time())
+    from_ts = int(from_ts or (to_ts - (limit * 60)))
 
     url = (
         "https://api.mercadobitcoin.net/api/v4/candles"
@@ -75,9 +92,20 @@ def parse_args():
     parser.add_argument("--asset", default="BTC/BRL", help="Internal DB asset name. Default: BTC/BRL")
     parser.add_argument("--timeframe", default="1m", help="Candle timeframe/resolution. Default: 1m")
     parser.add_argument("--limit", type=int, default=100, help="Approximate number of minutes/candles to fetch. Default: 100")
+    parser.add_argument("--from-local", help='Start datetime in America/Sao_Paulo, format "YYYY-MM-DD HH:MM".')
+    parser.add_argument("--to-local", help='End datetime in America/Sao_Paulo, format "YYYY-MM-DD HH:MM".')
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    seed_history(symbol=args.symbol, asset=args.asset, timeframe=args.timeframe, limit=args.limit)
+    from_ts = parse_local_datetime(args.from_local) if args.from_local else None
+    to_ts = parse_local_datetime(args.to_local) if args.to_local else None
+    seed_history(
+        symbol=args.symbol,
+        asset=args.asset,
+        timeframe=args.timeframe,
+        limit=args.limit,
+        from_ts=from_ts,
+        to_ts=to_ts,
+    )

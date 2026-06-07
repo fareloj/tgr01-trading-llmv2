@@ -27,12 +27,12 @@ NEGATIVE_NEWS_TERMS = {
 }
 
 
-def get_latest_news(hours: int = 24, limit: int = 5) -> list:
+def get_latest_news(hours: int = 24, limit: int = 5, as_of_timestamp: int | None = None) -> list:
     """Busca as notícias das últimas N horas no SQLite (Push cronológico, sem RAG Vectorial)."""
     conn = get_connection()
     cursor = conn.cursor()
     
-    now = int(time.time())
+    now = int(as_of_timestamp or time.time())
     time_threshold = now - (hours * 3600)
     max_allowed_timestamp = now + FUTURE_NEWS_TOLERANCE_SECONDS
     
@@ -57,9 +57,9 @@ def get_latest_news(hours: int = 24, limit: int = 5) -> list:
     return news_list
 
 
-def build_data_health(df, recent_news: list) -> dict:
+def build_data_health(df, recent_news: list, now: int | None = None) -> dict:
     """Resume frescor temporal dos dados usados pelo ciclo."""
-    now = int(time.time())
+    now = int(now or time.time())
     latest_kline_timestamp = int(df["timestamp"].max()) if not df.empty else None
     latest_news_timestamp = max((int(item["timestamp"]) for item in recent_news), default=None)
 
@@ -117,11 +117,11 @@ def build_news_risk(recent_news: list) -> dict:
         "matched_headlines": matched_headlines,
     }
 
-def build_agent_payload(asset: str = "BTC/BRL", timeframe: str = "1m") -> dict:
+def build_agent_payload(asset: str = "BTC/BRL", timeframe: str = "1m", as_of_timestamp: int | None = None) -> dict:
     """Monta o JSON final mastigado para injetar no LLM (O único agente mestre)."""
     
     # 1. Busca os Klines e converte matemática bruta em Status de texto
-    df = get_historical_klines(asset=asset, timeframe=timeframe, limit=50)
+    df = get_historical_klines(asset=asset, timeframe=timeframe, limit=50, as_of_timestamp=as_of_timestamp)
     technical_context = calculate_technical_status(df, asset=asset, timeframe=timeframe)
     
     # Se der erro técnico (sem preços suficientes), nem perde tempo com notícia
@@ -129,8 +129,8 @@ def build_agent_payload(asset: str = "BTC/BRL", timeframe: str = "1m") -> dict:
         return technical_context
         
     # 2. Busca as últimas notícias reais/mockadas
-    recent_news = get_latest_news(hours=24, limit=5)
-    data_health = build_data_health(df, recent_news)
+    recent_news = get_latest_news(hours=24, limit=5, as_of_timestamp=as_of_timestamp)
+    data_health = build_data_health(df, recent_news, now=as_of_timestamp)
     news_risk = build_news_risk(recent_news)
     
     # 3. Busca saldos virtuais

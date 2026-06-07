@@ -11,17 +11,28 @@ from core.database import get_connection, get_db_path
 MIN_TECHNICAL_KLINES = 30
 
 
-def get_historical_klines(asset: str = "BTC/BRL", timeframe: str = "1m", limit: int = 100) -> pd.DataFrame:
+def get_historical_klines(
+    asset: str = "BTC/BRL",
+    timeframe: str = "1m",
+    limit: int = 100,
+    as_of_timestamp: int | None = None,
+) -> pd.DataFrame:
     """Busca as ultimas N klines do banco e converte para DataFrame do Pandas."""
     conn = get_connection()
-    query = '''
+    as_of_filter = "AND timestamp <= ?" if as_of_timestamp is not None else ""
+    params = [asset, timeframe]
+    if as_of_timestamp is not None:
+        params.append(as_of_timestamp)
+    params.append(limit)
+    query = f'''
         SELECT timestamp, open, high, low, close, volume
         FROM klines
         WHERE asset = ? AND timeframe = ?
+        {as_of_filter}
         ORDER BY timestamp DESC
         LIMIT ?
     '''
-    df = pd.read_sql_query(query, conn, params=(asset, timeframe, limit))
+    df = pd.read_sql_query(query, conn, params=tuple(params))
     conn.close()
 
     if df.empty:

@@ -130,6 +130,9 @@ Adicionar suporte opcional:
 build_agent_payload(asset="BTC/BRL", timeframe="1m", as_of_timestamp=None)
 ```
 
+Status: implementado para testes historicos sem execucao. O builder agora pode
+montar payload limitado a um timestamp, sem permitir candle/noticia futura.
+
 ### `backend/tests/run_replay_trading.py`
 
 Novo runner acelerado.
@@ -157,6 +160,49 @@ python .\backend\tests\analyze_entry_decisions.py --since-id X --horizons 5,15,3
 Melhoria futura: adicionar tolerancia maxima de gap no `evaluate_decisions.py`
 para nao comparar uma decisao com candle muito distante quando houver buraco no
 historico.
+
+## Teste historico rapido da IA
+
+Antes do replay executar ordens paper, ja existe um teste mais simples: rodar a
+IA e o Risk Manager em uma janela historica sem gravar trade e sem alterar
+portfolio.
+
+Baixar candles historicos para uma janela especifica:
+
+```powershell
+python .\backend\tests\seed_historical_data.py --from-local "2026-06-07 10:00" --to-local "2026-06-07 12:00"
+```
+
+Encontrar automaticamente janelas de alta, queda e lateralizacao no SQLite:
+
+```powershell
+python .\backend\tests\find_market_windows.py --from-local "2026-06-07 00:00" --to-local "2026-06-07 23:59" --window-minutes 60 --stride-minutes 10
+```
+
+O detector classifica janelas como:
+
+```text
+UPTREND   move >= +0.5%
+DOWNTREND move <= -0.5%
+SIDEWAYS  move entre -0.15% e +0.15%
+MIXED     o resto
+```
+
+Rodar 10 decisoes historicas sem execucao:
+
+```powershell
+python .\backend\tests\run_historical_llm_scenarios.py --name queda_manha --from-local "2026-06-07 10:00" --to-local "2026-06-07 12:00" --cycles 10 --step-seconds 300
+```
+
+Arquivos gerados:
+
+```text
+backend/reports/last_historical_llm_scenario.json
+backend/reports/last_historical_llm_scenario.md
+```
+
+Esse modo serve para comparar como a IA reage em janelas de alta, queda e
+lateralizacao, mantendo o Risk Manager como avaliador deterministico.
 
 ## Cuidados
 
