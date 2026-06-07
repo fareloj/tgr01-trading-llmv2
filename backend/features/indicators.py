@@ -1,12 +1,13 @@
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(BASE_DIR))
 
-from core.database import get_connection, get_db_path
+from core.database import get_connection, get_db_path  # noqa: E402
 
 MIN_TECHNICAL_KLINES = 30
 
@@ -58,10 +59,14 @@ def calculate_technical_status(df: pd.DataFrame, asset: str = "BTC/BRL", timefra
             "db_path": str(get_db_path()),
         }
 
-    # RSI (14)
+    # RSI (14) - Optimized with numpy instead of pd.where
     delta = df["close"].diff()
-    gain = delta.where(delta > 0, 0.0).rolling(window=14, min_periods=1).mean()
-    loss = (-delta.where(delta < 0, 0.0)).rolling(window=14, min_periods=1).mean()
+    # np.where is significantly faster than pd.Series.where for large dataframes
+    gain_series = pd.Series(np.where(delta > 0, delta, 0.0), index=delta.index)
+    loss_series = pd.Series(np.where(delta < 0, -delta, 0.0), index=delta.index)
+
+    gain = gain_series.rolling(window=14, min_periods=1).mean()
+    loss = loss_series.rolling(window=14, min_periods=1).mean()
     rs = gain / loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
@@ -72,11 +77,13 @@ def calculate_technical_status(df: pd.DataFrame, asset: str = "BTC/BRL", timefra
     macd_signal = df["MACD"].ewm(span=9, adjust=False).mean()
     df["MACD_Hist"] = df["MACD"] - macd_signal
 
-    # ATR (14)
+    # ATR (14) - Optimized to avoid redundant shift and slow concat
+    close_shift = df["close"].shift()
     high_low = df["high"] - df["low"]
-    high_close = (df["high"] - df["close"].shift()).abs()
-    low_close = (df["low"] - df["close"].shift()).abs()
-    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    high_close = (df["high"] - close_shift).abs()
+    low_close = (df["low"] - close_shift).abs()
+    # np.maximum is much faster than pd.concat([a,b,c], axis=1).max(axis=1)
+    true_range = np.maximum(high_low, np.maximum(high_close, low_close))
     df["ATR"] = true_range.rolling(window=14, min_periods=1).mean()
 
     latest = df.iloc[-1]
