@@ -59,6 +59,33 @@ def test_risk_configuration_and_kelly_reject_invalid_numbers():
     assert rm.calculate_fractional_kelly(1.0, 1.5) == 0.0
 
 
+def test_daily_drawdown_blocks_buy_but_allows_risk_reducing_sell():
+    rm = RiskManager(max_daily_drawdown=5.0, max_exposure=80.0, cooldown_minutes=0)
+    payload = {
+        "technical_context": {
+            "current_price": 40_000.0,
+            "rsi": {"status": "NEUTRAL"},
+            "macd": {"status": "NEUTRAL"},
+            "volatility_atr": 100.0,
+        },
+        "news_context": [{"headline": "safe"}],
+        "data_health": {"is_market_data_stale": False, "is_news_stale": False},
+        "news_risk": {"has_negative_red_flag": False},
+        "portfolio_context": {
+            "max_allowed_risk_per_trade": 5.0,
+            "daily_drawdown_percentage": 5.1,
+        },
+    }
+
+    blocked = rm.evaluate_order("BUY", 90, payload, current_exposure=20.0)
+    assert blocked["action"] == "HOLD"
+    assert "drawdown diario" in blocked["reason"]
+
+    allowed = rm.evaluate_order("SELL", 90, payload, current_exposure=20.0)
+    assert allowed["action"] == "SELL"
+    assert allowed["executed_size"] == 5.0
+
+
 def test_red_team_flash_crash():
     """
     Scenario 1: test_red_team_flash_crash()

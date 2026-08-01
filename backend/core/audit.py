@@ -54,6 +54,12 @@ def build_payload_snapshot(payload: dict) -> dict:
             "current_exposure_percentage": portfolio.get("current_exposure_percentage"),
             "is_in_drawdown": portfolio.get("is_in_drawdown"),
             "max_allowed_risk_per_trade": portfolio.get("max_allowed_risk_per_trade"),
+            "equity_snapshot_id": portfolio.get("equity_snapshot_id"),
+            "equity_brl": portfolio.get("equity_brl"),
+            "daily_reference_equity_brl": portfolio.get("daily_reference_equity_brl"),
+            "daily_reference_timestamp": portfolio.get("daily_reference_timestamp"),
+            "daily_drawdown_percentage": portfolio.get("daily_drawdown_percentage"),
+            "daily_drawdown_limit_percentage": portfolio.get("daily_drawdown_limit_percentage"),
         },
         "recent_news": recent_news,
     }

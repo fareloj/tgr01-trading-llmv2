@@ -24,6 +24,7 @@ from backend.core.db_models import (
     virtual_portfolio,
 )
 from backend.features.payload_builder import build_agent_payload
+from backend.execution.paper_simulator import PaperExecutionConfig
 from backend.core.runtime_safety import REQUIRED_WORKERS, assess_worker_heartbeats
 from backend.tests.analyze_trade_logs import classify_reason
 
@@ -217,6 +218,23 @@ def llm_report(blockers: list[str]):
         blockers.append("Nenhuma chave LLM configurada; runtime falha para HOLD.")
 
 
+def execution_config_report(blockers: list[str]):
+    print_section("Custos de Execucao Paper")
+    try:
+        config = PaperExecutionConfig.from_env()
+    except ValueError as error:
+        blockers.append(f"Configuracao de execucao paper invalida: {error}")
+        print(f"[FAIL] {error}")
+        return
+    print(f"fee_rate={config.fee_rate:.6f} ({config.fee_rate * 100:.3f}%)")
+    print(
+        "slippage_rate="
+        f"{config.min_slippage_rate:.6f}..{config.max_slippage_rate:.6f} "
+        f"({config.min_slippage_rate * 100:.3f}%..{config.max_slippage_rate * 100:.3f}%)"
+    )
+    print(f"atr_slippage_factor={config.atr_slippage_factor:.6f}")
+
+
 def audit_report(since_id: int | None, warnings: list[str]):
     print_section("Auditoria / Paper Trading")
     with database.engine.connect() as conn:
@@ -312,6 +330,7 @@ if __name__ == "__main__":
     worker_report(blockers, warnings)
     payload_report(blockers, warnings)
     capital_state_report(blockers)
+    execution_config_report(blockers)
     llm_report(blockers)
     audit_report(args.since_id, warnings)
     raise SystemExit(final_verdict(blockers, warnings, strict=args.strict))

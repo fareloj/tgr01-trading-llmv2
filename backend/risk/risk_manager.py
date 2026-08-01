@@ -122,6 +122,21 @@ class RiskManager:
         if action not in {"BUY", "SELL"}:
             return {"action": "HOLD", "reason": f"LLM sugeriu acao invalida: {llm_action}", "executed_size": 0.0}
 
+        if action == "BUY":
+            drawdown = payload.get("portfolio_context", {}).get("daily_drawdown_percentage")
+            if drawdown is not None:
+                try:
+                    drawdown = float(drawdown)
+                except (TypeError, ValueError, OverflowError):
+                    return self._hold("Drawdown diario invalido ou nao numerico.")
+                if not math.isfinite(drawdown) or drawdown < 0:
+                    return self._hold("Drawdown diario invalido ou nao finito.")
+                if drawdown >= self.max_daily_drawdown:
+                    return self._hold(
+                        "Limite de drawdown diario atingido "
+                        f"({drawdown:.2f}% >= {self.max_daily_drawdown:.2f}%). BUY bloqueado."
+                    )
+
         directional_block = self._directional_gate(action, payload)
         if directional_block:
             return directional_block

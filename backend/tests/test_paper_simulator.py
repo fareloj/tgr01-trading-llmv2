@@ -94,9 +94,26 @@ def test_init_db_migrates_execution_audit_columns():
 
     assert "paper_position_state" in tables
     assert "paper_position_reconciliations" in tables
+    assert "equity_snapshots" in tables
     assert "effective_price" in columns
     assert "fee_brl" in columns
     assert "realized_pnl_brl" in columns
+
+
+def test_execution_config_rejects_impossible_cost_assumptions(monkeypatch):
+    for kwargs in (
+        {"fee_rate": math.nan},
+        {"fee_rate": 0.11},
+        {"min_slippage_rate": 0.02, "max_slippage_rate": 0.01},
+        {"max_slippage_rate": 0.11},
+        {"atr_slippage_factor": -1},
+    ):
+        with pytest.raises(ValueError):
+            PaperExecutionConfig(**kwargs)
+
+    monkeypatch.setenv("PAPER_FEE_RATE", "invalid")
+    with pytest.raises(ValueError, match="fee_rate"):
+        PaperExecutionConfig.from_env()
 
 
 def test_non_finite_execution_input_fails_before_mutation():

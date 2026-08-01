@@ -14,9 +14,10 @@ from backend.core.audit import serialize_payload_snapshot
 from backend.core.database import get_db_path, init_db, print_db_diagnostics
 from backend.core import database, repository
 from backend.core.runtime_safety import assess_worker_heartbeats
-from backend.execution.paper_simulator import empty_execution_audit, execute_paper_order
+from backend.execution.paper_simulator import PaperExecutionConfig, empty_execution_audit, execute_paper_order
 from backend.features.payload_builder import build_agent_payload
 from backend.risk.risk_manager import RiskManager
+from backend.risk.portfolio_guard import enrich_payload_with_daily_equity
 
 load_dotenv()
 
@@ -76,6 +77,15 @@ def run_trading_cycle():
         return False
 
     current_price = payload["technical_context"]["current_price"]
+    rm = RiskManager(max_exposure=80.0)
+    try:
+        enrich_payload_with_daily_equity(payload, max_daily_drawdown=rm.max_daily_drawdown)
+    except (RuntimeError, ValueError) as error:
+        reason = f"Pre-LLM abort: estado de capital paper invalido ({error})."
+        print(f"[!] {reason}")
+        audit_hold_without_llm(payload, reason)
+        print("=" * 60 + "\n")
+        return False
     print(f"      -> Preco Atual: R${current_price:.2f}")
     data_health = payload.get("data_health", {})
     print(
@@ -134,7 +144,6 @@ def run_trading_cycle():
             print(f"         {line}")
 
     print("[3/4] Avaliando Risco Matematico (A Muralha)...")
-    rm = RiskManager(max_exposure=80.0)
     current_exposure = payload["portfolio_context"]["current_exposure_percentage"]
 
     if is_llm_technical_failure(llm_decision):
@@ -197,6 +206,7 @@ def _execute_if_approved(connection, final_order: dict, current_price: float, pa
         executed_size_pct=final_order["executed_size"],
         current_price=current_price,
         payload=payload,
+        config=PaperExecutionConfig.from_env(),
     )
     print(
         "      -> Execucao paper: "

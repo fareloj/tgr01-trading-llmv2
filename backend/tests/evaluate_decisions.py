@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 if str(PROJECT_DIR) not in sys.path:
@@ -11,6 +11,9 @@ if str(PROJECT_DIR) not in sys.path:
 
 from backend.core import database
 from backend.core.db_models import klines, trade_logs
+
+
+DEFAULT_MAX_CANDLE_DELAY_SECONDS = 90
 
 
 def parse_horizons(value: str) -> list[int]:
@@ -23,7 +26,12 @@ def evaluation_base_price(row: dict) -> float:
     return float(row.get("execution_price") or 0.0)
 
 
-def fetch_future_price(connection, timestamp: int, horizon_minutes: int) -> dict | None:
+def fetch_future_price(
+    connection,
+    timestamp: int,
+    horizon_minutes: int,
+    max_delay_seconds: int = DEFAULT_MAX_CANDLE_DELAY_SECONDS,
+) -> dict | None:
     target = timestamp + (horizon_minutes * 60)
     row = connection.execute(
         select(klines.c.timestamp, klines.c.close)
@@ -31,11 +39,35 @@ def fetch_future_price(connection, timestamp: int, horizon_minutes: int) -> dict
             klines.c.asset == "BTC/BRL",
             klines.c.timeframe == "1m",
             klines.c.timestamp >= target,
+            klines.c.timestamp <= target + max_delay_seconds,
         )
         .order_by(klines.c.timestamp.asc())
         .limit(1)
     ).first()
     return dict(row._mapping) if row else None
+
+
+def assess_future_price(
+    connection,
+    timestamp: int,
+    horizon_minutes: int,
+    max_delay_seconds: int = DEFAULT_MAX_CANDLE_DELAY_SECONDS,
+) -> tuple[str, dict | None]:
+    """Distinguish an immature horizon from a mature horizon with missing candles."""
+    target = timestamp + (horizon_minutes * 60)
+    future = fetch_future_price(connection, timestamp, horizon_minutes, max_delay_seconds)
+    if future is not None:
+        return "matured", future
+
+    latest_timestamp = connection.scalar(
+        select(func.max(klines.c.timestamp)).where(
+            klines.c.asset == "BTC/BRL",
+            klines.c.timeframe == "1m",
+        )
+    )
+    if latest_timestamp is None or int(latest_timestamp) < target:
+        return "not_matured", None
+    return "data_gap", None
 
 
 def classify(action: str, move_pct: float, threshold_pct: float) -> str:
@@ -60,7 +92,13 @@ def classify(action: str, move_pct: float, threshold_pct: float) -> str:
     return "not_applicable"
 
 
-def evaluate(since_id: int | None, horizons: list[int], threshold_pct: float, limit: int):
+def evaluate(
+    since_id: int | None,
+    horizons: list[int],
+    threshold_pct: float,
+    limit: int,
+    max_candle_delay_seconds: int = DEFAULT_MAX_CANDLE_DELAY_SECONDS,
+):
     stmt = select(
         trade_logs.c.id,
         trade_logs.c.timestamp,
@@ -84,6 +122,7 @@ def evaluate(since_id: int | None, horizons: list[int], threshold_pct: float, li
         str(horizon): {
             "matured": 0,
             "not_matured": 0,
+            "data_gap": 0,
             "good": 0,
             "bad": 0,
             "neutral": 0,
@@ -102,10 +141,26 @@ def evaluate(since_id: int | None, horizons: list[int], threshold_pct: float, li
             item["horizons"] = {}
             for horizon in horizons:
                 bucket = summary[str(horizon)]
-                future = fetch_future_price(conn, int(row["timestamp"]), horizon)
-                if future is None or base_price <= 0:
+                maturity, future = assess_future_price(
+                    conn,
+                    int(row["timestamp"]),
+                    horizon,
+                    max_candle_delay_seconds,
+                )
+                if base_price <= 0:
                     bucket["not_matured"] += 1
-                    item["horizons"][str(horizon)] = {"status": "not_matured"}
+                    item["horizons"][str(horizon)] = {
+                        "status": "not_matured",
+                        "reason": "invalid_base_price",
+                    }
+                    continue
+                if maturity != "matured" or future is None:
+                    bucket[maturity] += 1
+                    item["horizons"][str(horizon)] = {
+                        "status": maturity,
+                        "target_timestamp": int(row["timestamp"]) + (horizon * 60),
+                        "max_candle_delay_seconds": max_candle_delay_seconds,
+                    }
                     continue
                 future_price = float(future["close"])
                 move_pct = ((future_price - base_price) / base_price) * 100.0
@@ -125,6 +180,7 @@ def evaluate(since_id: int | None, horizons: list[int], threshold_pct: float, li
         "since_id": since_id,
         "threshold_pct": threshold_pct,
         "horizons_minutes": horizons,
+        "max_candle_delay_seconds": max_candle_delay_seconds,
         "logs_evaluated": len(evaluations),
         "summary": summary,
         "evaluations": evaluations,
@@ -158,6 +214,7 @@ def parse_args():
     parser.add_argument("--horizons", default="5,15,30,60")
     parser.add_argument("--threshold", type=float, default=0.20)
     parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--max-candle-delay", type=int, default=DEFAULT_MAX_CANDLE_DELAY_SECONDS)
     parser.add_argument("--json-out", default="")
     return parser.parse_args()
 
@@ -169,6 +226,7 @@ if __name__ == "__main__":
         horizons=parse_horizons(args.horizons),
         threshold_pct=args.threshold,
         limit=args.limit,
+        max_candle_delay_seconds=args.max_candle_delay,
     )
     if args.json_out:
         output = Path(args.json_out)

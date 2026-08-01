@@ -5,7 +5,7 @@ from sqlalchemy import select, update, insert, and_, or_, desc, func, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from backend.core import database
 from backend.core.db_models import (
-    metadata, klines, news, trade_logs, virtual_portfolio,
+    metadata, klines, news, trade_logs, equity_snapshots, virtual_portfolio,
     paper_position_state, paper_position_reconciliations, system_health,
     rag_documents, rag_chunks, rag_retrieval_logs, analysis_tool_calls,
     market_events
@@ -124,6 +124,43 @@ def get_virtual_portfolio(connection=None, *, for_update: bool = False) -> Dict[
         stmt = stmt.with_for_update()
     res = _execute_query(stmt, connection=connection)
     return {r[0]: r[1] for r in res}
+
+
+def add_equity_snapshot(snapshot: Dict[str, Any], *, connection) -> int:
+    """Insert one mark-to-market portfolio observation in the caller transaction."""
+    result = _execute_query(insert(equity_snapshots).values(**snapshot), connection=connection)
+    return int(result.inserted_primary_key[0]) if result.inserted_primary_key else 0
+
+
+def get_first_equity_snapshot(
+    asset: str,
+    start_timestamp: int,
+    end_timestamp: Optional[int] = None,
+    connection=None,
+) -> Optional[Dict[str, Any]]:
+    """Return the first snapshot in a bounded period for the requested asset."""
+    stmt = select(equity_snapshots).where(
+        and_(
+            equity_snapshots.c.asset == asset,
+            equity_snapshots.c.timestamp >= start_timestamp,
+        )
+    )
+    if end_timestamp is not None:
+        stmt = stmt.where(equity_snapshots.c.timestamp <= end_timestamp)
+    stmt = stmt.order_by(equity_snapshots.c.timestamp.asc(), equity_snapshots.c.id.asc()).limit(1)
+    row = _execute_query(stmt, connection=connection).first()
+    return dict(row._mapping) if row else None
+
+
+def get_latest_equity_snapshot(asset: str, connection=None) -> Optional[Dict[str, Any]]:
+    stmt = (
+        select(equity_snapshots)
+        .where(equity_snapshots.c.asset == asset)
+        .order_by(equity_snapshots.c.timestamp.desc(), equity_snapshots.c.id.desc())
+        .limit(1)
+    )
+    row = _execute_query(stmt, connection=connection).first()
+    return dict(row._mapping) if row else None
 
 def update_virtual_portfolio(currency: str, amount: float, connection=None):
     """Sets a currency amount directly."""
@@ -268,7 +305,7 @@ def get_system_health(connection=None) -> List[Dict[str, Any]]:
 def clear_all_tables(connection=None):
     """Truncates or deletes all database tables."""
     tables_to_clear = [
-        'klines', 'news', 'trade_logs', 'virtual_portfolio',
+        'klines', 'news', 'trade_logs', 'equity_snapshots', 'virtual_portfolio',
         'paper_position_state', 'paper_position_reconciliations', 'system_health',
         'rag_documents', 'rag_chunks', 'rag_retrieval_logs',
         'analysis_tool_calls', 'market_events'

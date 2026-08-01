@@ -68,7 +68,22 @@ trade_logs = Table(
 )
 Index('idx_trade_logs_action_timestamp', trade_logs.c.action, trade_logs.c.timestamp)
 
-# 4. Virtual Portfolio
+# 4. Mark-to-market Equity Snapshots
+equity_snapshots = Table(
+    'equity_snapshots',
+    metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('timestamp', Integer, nullable=False),
+    Column('asset', String, nullable=False),
+    Column('mark_price', Float, nullable=False),
+    Column('brl_balance', Float, nullable=False),
+    Column('btc_balance', Float, nullable=False),
+    Column('equity_brl', Float, nullable=False),
+    Column('source', String, nullable=False),
+)
+Index('idx_equity_snapshots_asset_timestamp', equity_snapshots.c.asset, equity_snapshots.c.timestamp)
+
+# 5. Virtual Portfolio
 virtual_portfolio = Table(
     'virtual_portfolio',
     metadata,
@@ -77,7 +92,7 @@ virtual_portfolio = Table(
     Column('amount', Float, nullable=False)
 )
 
-# 5. Paper Position State
+# 6. Paper Position State
 paper_position_state = Table(
     'paper_position_state',
     metadata,
@@ -88,7 +103,7 @@ paper_position_state = Table(
     Column('updated_at', Integer, nullable=False)
 )
 
-# 6. Paper Position Reconciliations
+# 7. Paper Position Reconciliations
 paper_position_reconciliations = Table(
     'paper_position_reconciliations',
     metadata,
@@ -113,7 +128,7 @@ Index(
     paper_position_reconciliations.c.timestamp,
 )
 
-# 7. System Health
+# 8. System Health
 system_health = Table(
     'system_health',
     metadata,
@@ -121,7 +136,7 @@ system_health = Table(
     Column('last_heartbeat', Integer, nullable=False)
 )
 
-# 8. RAG Documents
+# 9. RAG Documents
 rag_documents = Table(
     'rag_documents',
     metadata,
@@ -137,7 +152,7 @@ rag_documents = Table(
 Index('idx_rag_documents_published_at', rag_documents.c.published_at)
 Index('idx_rag_documents_source_type', rag_documents.c.source_type)
 
-# 9. RAG Chunks
+# 10. RAG Chunks
 rag_chunks = Table(
     'rag_chunks',
     metadata,
@@ -153,7 +168,7 @@ rag_chunks = Table(
 )
 Index('idx_rag_chunks_document_id', rag_chunks.c.document_id)
 
-# 10. RAG Retrieval Logs
+# 11. RAG Retrieval Logs
 rag_retrieval_logs = Table(
     'rag_retrieval_logs',
     metadata,
@@ -165,7 +180,7 @@ rag_retrieval_logs = Table(
     Column('selected_chunk_ids_json', String, nullable=False, server_default="'[]'")
 )
 
-# 11. Deterministic Analysis Tool Audit
+# 12. Deterministic Analysis Tool Audit
 analysis_tool_calls = Table(
     'analysis_tool_calls',
     metadata,
@@ -184,7 +199,7 @@ analysis_tool_calls = Table(
 Index('idx_analysis_tool_calls_as_of', analysis_tool_calls.c.as_of_timestamp)
 Index('idx_analysis_tool_calls_tool_status', analysis_tool_calls.c.tool_name, analysis_tool_calls.c.status)
 
-# 12. Objective Market Event Memory
+# 13. Objective Market Event Memory
 market_events = Table(
     'market_events',
     metadata,

@@ -1,4 +1,5 @@
 import math
+import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +13,39 @@ class PaperExecutionConfig:
     min_slippage_rate: float = 0.0005
     max_slippage_rate: float = 0.003
     atr_slippage_factor: float = 0.10
+
+    def __post_init__(self) -> None:
+        normalized = {}
+        for field_name in (
+            "fee_rate",
+            "min_slippage_rate",
+            "max_slippage_rate",
+            "atr_slippage_factor",
+        ):
+            try:
+                value = float(getattr(self, field_name))
+            except (TypeError, ValueError, OverflowError) as error:
+                raise ValueError(f"{field_name} must be numeric") from error
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{field_name} must be finite and non-negative")
+            normalized[field_name] = value
+        if normalized["fee_rate"] > 0.10:
+            raise ValueError("fee_rate above 10% is not a valid paper execution assumption")
+        if normalized["max_slippage_rate"] > 0.10:
+            raise ValueError("max_slippage_rate above 10% is not supported")
+        if normalized["min_slippage_rate"] > normalized["max_slippage_rate"]:
+            raise ValueError("min_slippage_rate cannot exceed max_slippage_rate")
+        for field_name, value in normalized.items():
+            object.__setattr__(self, field_name, value)
+
+    @classmethod
+    def from_env(cls) -> "PaperExecutionConfig":
+        return cls(
+            fee_rate=os.getenv("PAPER_FEE_RATE", "0.003"),
+            min_slippage_rate=os.getenv("PAPER_MIN_SLIPPAGE_RATE", "0.0005"),
+            max_slippage_rate=os.getenv("PAPER_MAX_SLIPPAGE_RATE", "0.003"),
+            atr_slippage_factor=os.getenv("PAPER_ATR_SLIPPAGE_FACTOR", "0.10"),
+        )
 
 
 def empty_execution_audit(current_price: float) -> dict:
@@ -34,11 +68,20 @@ def empty_execution_audit(current_price: float) -> dict:
 
 def estimate_slippage_rate(payload: dict, config: PaperExecutionConfig = PaperExecutionConfig()) -> float:
     tech = payload.get("technical_context", {})
-    current_price = float(tech.get("current_price") or 0.0)
+    try:
+        current_price = float(tech.get("current_price") or 0.0)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Payload current_price must be numeric for slippage estimation") from error
     atr = tech.get("volatility_atr", 0.0)
     if isinstance(atr, dict):
         atr = atr.get("value", 0.0)
-    atr = float(atr or 0.0)
+    try:
+        atr = float(atr or 0.0)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Payload ATR must be numeric for slippage estimation") from error
+
+    if not math.isfinite(current_price) or not math.isfinite(atr) or atr < 0:
+        raise ValueError("Payload price and ATR must be finite; ATR cannot be negative")
 
     if current_price <= 0:
         return config.min_slippage_rate
@@ -55,8 +98,13 @@ def execute_paper_order(
     payload: dict,
     config: PaperExecutionConfig = PaperExecutionConfig(),
 ) -> dict:
-    action = action.upper()
-    if not math.isfinite(float(executed_size_pct)) or not math.isfinite(float(current_price)):
+    action = str(action).strip().upper()
+    try:
+        executed_size_pct = float(executed_size_pct)
+        current_price = float(current_price)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Paper execution requires numeric size and price values.") from error
+    if not math.isfinite(executed_size_pct) or not math.isfinite(current_price):
         raise ValueError("Paper execution requires finite size and price values.")
     if action not in {"BUY", "SELL"} or executed_size_pct <= 0 or current_price <= 0:
         return empty_execution_audit(current_price)

@@ -12,7 +12,12 @@ if str(PROJECT_DIR) not in sys.path:
 
 from backend.core import database
 from backend.core.db_models import trade_logs
-from backend.tests.evaluate_decisions import classify, fetch_future_price, parse_horizons
+from backend.tests.evaluate_decisions import (
+    DEFAULT_MAX_CANDLE_DELAY_SECONDS,
+    assess_future_price,
+    classify,
+    parse_horizons,
+)
 
 def load_snapshot(raw: str | None) -> dict:
     if not raw:
@@ -37,7 +42,12 @@ def evaluation_base_price(row: dict) -> float:
     return float(row["execution_price"] or 0.0)
 
 
-def evaluate_entries(since_id: int | None, horizons: list[int], threshold_pct: float) -> dict:
+def evaluate_entries(
+    since_id: int | None,
+    horizons: list[int],
+    threshold_pct: float,
+    max_candle_delay_seconds: int = DEFAULT_MAX_CANDLE_DELAY_SECONDS,
+) -> dict:
     stmt = select(
         trade_logs.c.id,
         trade_logs.c.timestamp,
@@ -74,10 +84,25 @@ def evaluate_entries(since_id: int | None, horizons: list[int], threshold_pct: f
             item["data_health"] = snapshot.get("data_health", {})
             item["horizons"] = {}
             for horizon in horizons:
-                future = fetch_future_price(conn, int(row["timestamp"]), horizon)
+                maturity, future = assess_future_price(
+                    conn,
+                    int(row["timestamp"]),
+                    horizon,
+                    max_candle_delay_seconds,
+                )
                 base_price = item["evaluation_base_price"]
-                if future is None or not base_price:
-                    item["horizons"][str(horizon)] = {"status": "not_matured"}
+                if not base_price:
+                    item["horizons"][str(horizon)] = {
+                        "status": "not_matured",
+                        "reason": "invalid_base_price",
+                    }
+                    continue
+                if maturity != "matured" or future is None:
+                    item["horizons"][str(horizon)] = {
+                        "status": maturity,
+                        "target_timestamp": int(row["timestamp"]) + (horizon * 60),
+                        "max_candle_delay_seconds": max_candle_delay_seconds,
+                    }
                     continue
                 move_pct = ((float(future["close"]) - base_price) / base_price) * 100.0
                 evaluated_action = row["action"] if kind == "approved" else "HOLD"
@@ -114,6 +139,7 @@ def evaluate_entries(since_id: int | None, horizons: list[int], threshold_pct: f
         "since_id": since_id,
         "threshold_pct": threshold_pct,
         "horizons_minutes": horizons,
+        "max_candle_delay_seconds": max_candle_delay_seconds,
         "entries_total": len(entries),
         "approved_count": len(approved),
         "blocked_count": len(blocked),
@@ -152,13 +178,19 @@ def parse_args():
     parser.add_argument("--since-id", type=int, default=None)
     parser.add_argument("--horizons", default="5,15,30,60")
     parser.add_argument("--threshold", type=float, default=0.20)
+    parser.add_argument("--max-candle-delay", type=int, default=DEFAULT_MAX_CANDLE_DELAY_SECONDS)
     parser.add_argument("--json-out", default="")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    report = evaluate_entries(args.since_id, parse_horizons(args.horizons), args.threshold)
+    report = evaluate_entries(
+        args.since_id,
+        parse_horizons(args.horizons),
+        args.threshold,
+        args.max_candle_delay,
+    )
     print_report(report)
     if args.json_out:
         output = Path(args.json_out)
