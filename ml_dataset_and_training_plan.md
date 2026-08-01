@@ -140,6 +140,25 @@ boosting in walk-forward validation before being connected to paper trading.
 Random train/test splits, absolute-price targets, and direct model-controlled
 order sizing remain prohibited.
 
+The official Binance archive was collected through June 2026 with checksum
+verification. It contains `4,656,799` BTCUSDT one-minute candles and yields
+`4,648,648` eligible causal rows: `1,055,212 BUY`, `2,564,297 HOLD`, and
+`1,029,139 SELL` under the global-domain cost assumption. The archive has 34
+gaps larger than one minute; large gaps create new feature segments.
+
+Two historical archive intervals required bounded timestamp normalization:
+`21,602` rows had a source offset within 30 seconds of the minute grid. The
+normalizer uses the following minute to avoid collision with the preceding
+short candle. Per-month sidecars bind the normalization count to the official
+archive SHA-256. This limitation must remain part of model provenance.
+
+The host Python 3.11 environment was validated with `torch 2.12.1+cu130` on the
+RTX 3060 (CUDA compute capability 8.6). The local wheel matched the SHA-256
+published by the official PyTorch index before installation, and an actual CUDA
+matrix multiplication completed successfully. Training code must still select
+the device explicitly, record the PyTorch/CUDA versions in every checkpoint,
+and remain offline with no paper or live order write path.
+
 ## Full Mercado Bitcoin Snapshot
 
 The resumable download completed on 2026-08-01 with:
@@ -167,6 +186,8 @@ signal persistence, cooldown, portfolio limits, and fresh market data.
 py -3.11 .\backend\tests\build_ml_dataset.py
 py -3.11 .\backend\tests\evaluate_ml_baselines.py
 py -3.11 .\backend\tests\download_mb_history.py
+py -3.11 .\backend\tests\download_binance_history.py
+py -3.11 .\backend\tests\build_multidomain_ml_dataset.py
 ```
 
 Generated CSV, JSON, and Markdown reports are written to `backend/reports`,

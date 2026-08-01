@@ -31,7 +31,7 @@ scenario.
 The [deterministic tool protocol report](LLM_TOOL_RED_TEAM_REPORT_2026-08-01.md)
 adds bounded LLM-requested analysis tools, objective market-event memory, and
 historical model/prompt benchmarks. The expanded suite records `141` passing
-Python tests. The history and causal-ML pipeline expands that coverage to `148`
+Python tests. The global history and causal-ML pipeline expands that coverage to `158`
 passing Python tests. This layer remains opt-in and paper-only.
 
 ## Interfaces
@@ -338,6 +338,29 @@ Raw exports and generated datasets stay under ignored runtime directories and
 are never committed. The current API retains BTC/BRL one-minute candles from
 2023-03-31 onward even though daily candles exist from 2013.
 
+For global regime pretraining, the repository also consumes Binance's official
+monthly BTCUSDT archive. Every ZIP is matched against its published SHA-256
+checksum, bounded against decompression abuse, converted to the canonical CSV
+contract, and kept separate from the Mercado Bitcoin calibration domain:
+
+```powershell
+py -3.11 .\backend\tests\download_binance_history.py
+
+py -3.11 .\backend\tests\build_multidomain_ml_dataset.py
+```
+
+The verified local snapshot contains `4,656,799` BTCUSDT candles from August
+2017 through June 2026 and produces `4,648,648` causal examples. Historical
+archive anomalies realigned `21,602` candles within a strict 30-second source
+offset tolerance; the affected month, archive digest, count, and maximum shift
+are persisted in per-month metadata. Global BTCUSDT is for pretraining only.
+BTC/BRL remains a separate fine-tuning and execution-calibration dataset.
+
+The neural research environment uses the official `torch 2.12.1+cu130` wheel.
+CUDA execution was verified on the local RTX 3060 with a real tensor operation;
+model checkpoints must record the exact Torch, CUDA, feature-schema, dataset,
+and split versions before they can be compared.
+
 The evaluator uses chronological train/validation/test partitions and purges
 the tail of earlier partitions so labels cannot cross a split boundary. It also
 prevents overlapping fixed-horizon trades from being counted as independent
@@ -481,7 +504,7 @@ python -m pytest -q
 The suite covers indicator edge cases, stale/missing data, contract failures,
 capital invariants, transaction rollback, concurrent access, database isolation,
 RAG boundaries, prompt-injection filtering, and operational command allowlists.
-The final validation for this revision completed 148 Python tests, 6 Node tests,
+The final validation for this revision completed 158 Python tests, 6 Node tests,
 and the Vite production build successfully.
 
 ## Desktop Console

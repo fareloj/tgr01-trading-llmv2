@@ -54,6 +54,7 @@ def build_dataset_from_chunks(
     config: DatasetConfig | None = None,
     metadata_path: Path | None = None,
     progress: ProgressCallback | None = None,
+    domain_metadata: dict[str, str] | None = None,
 ) -> dict:
     config = config or DatasetConfig()
     files = list_chunk_files(chunks_dir)
@@ -76,6 +77,11 @@ def build_dataset_from_chunks(
             current_start, current_end = chunk_window_from_path(current)
             dataset = dataset.loc[dataset["timestamp"].between(current_start, current_end)].copy()
             exported = select_columns_for_export(dataset, config.horizons_minutes)
+            if domain_metadata:
+                for column, value in domain_metadata.items():
+                    if not column or column in exported.columns:
+                        raise ValueError(f"invalid or duplicate domain metadata column: {column}")
+                    exported[column] = str(value)
             if not exported.empty:
                 exported.to_csv(
                     temporary,
@@ -108,6 +114,7 @@ def build_dataset_from_chunks(
         "first_timestamp": first_timestamp,
         "last_timestamp": last_timestamp,
         "label_distribution": dict(label_counts),
+        "domain_metadata": dict(domain_metadata or {}),
         "config": config.as_dict(),
     }
     if metadata_path:
