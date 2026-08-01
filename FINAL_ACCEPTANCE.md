@@ -13,13 +13,20 @@ ordens reais. Qualquer transicao para capital real e um projeto separado.
 - PostgreSQL 16 e o unico banco do caminho ativo.
 - Banco pytest isolado do banco da aplicacao e protegido contra duas suites
   simultaneas por advisory lock.
-- Suite Python: 104 testes aprovados.
+- Suite Python: 189 testes aprovados, incluindo inferencia neural fail-closed e
+  smoke test real da TUI.
+- Desktop: 6 testes Node, build Vite e smoke Electron aprovados; 17 acoes
+  operacionais cobertas e nenhum erro de renderer ou overflow horizontal.
+- Auditoria npm: zero vulnerabilidades conhecidas.
 - Backend compilado com `python -m compileall`.
 - Interface Electron/Vite compilada para producao.
 - Dump PostgreSQL mais recente validado por `pg_restore --list`: formato
   custom, 78 entradas de catalogo e dados.
 - RAG externo: 800 chunks densos e 800 lexicais, HNSW carregado e reranker em
   CUDA.
+- Matriz adversarial do LLM: qualidade direcional 7/7 e seguranca 7/7.
+- TCN multi-task avaliada em teste temporal reservado e exposta somente por um
+  advisor `RESEARCH_ONLY`, sem capacidade de autorizar ordens.
 - Paper position reconciliada a partir dos logs legados e fechada exatamente
   com os saldos observados.
 
@@ -34,14 +41,19 @@ ordens reais. Qualquer transicao para capital real e um projeto separado.
 - RAG fora do caminho de aprovacao de trades e filtrado contra corpus estranho,
   paths operacionais, segredos e prompt injection.
 - TUI e Electron executam apenas comandos presentes na allowlist do backend.
+- Timeout do reranker externo degrada para busca hibrida sem reranking, com
+  motivo e modo registrados, sem entrar no caminho de aprovacao de trades.
+- Checkpoints TCN usam schema versionado, carga `weights_only=True`,
+  calibracao validada e falha fechada quando faltam evidencias de teste.
 
 ## Estado Vivo Na Aceitacao
 
 - Capital paper preservado durante os red teams.
 - Posicao BTC/BRL possui custo medio reconstruido e proveniencia dos logs.
 - Ultimo ciclo validado terminou em HOLD sem alterar carteira.
-- O provedor Mercado Bitcoin apresentou candle temporariamente stale durante a
-  auditoria final; o preflight bloqueou o pipeline como projetado.
+- Readiness final retornou `PASS_WITH_WARNINGS`: dados e workers estavam
+  frescos; os avisos restantes pertencem ao historico auditado de falhas LLM e
+  stale data.
 
 ## Limitacoes Conhecidas
 
@@ -55,6 +67,10 @@ ordens reais. Qualquer transicao para capital real e um projeto separado.
   threshold, custos e regime. Elas nao sao uma verdade absoluta.
 - O modelo pode permanecer em HOLD por longos periodos. Isso deve ser avaliado
   por cenarios historicos, nao corrigido reduzindo guardrails no caminho vivo.
+- A TCN nao demonstrou edge executavel. Balanced accuracy foi 51,90%/54,32%
+  em 15m/60m, a precisao de BUY ficou abaixo de 46% e a regressao de retorno
+  perdeu para o baseline zero. Ela permanece somente como evidencia de
+  pesquisa.
 
 ## Comandos De Verificacao
 

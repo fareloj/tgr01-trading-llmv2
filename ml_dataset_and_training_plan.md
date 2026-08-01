@@ -222,6 +222,29 @@ The dedicated export contains `969,131` context rows. With stride five it
 produces `75,373` training, `27,543` validation, and `23,247` test endpoints,
 instead of the preliminary decision-row export's `15,592/6,144/1,099`.
 
+## Multi-Task First-Touch Result
+
+The endpoint-return experiment showed that a calibrated interval can still
+collapse toward zero and avoid every action. The final research variant keeps
+the quantile objective but adds a three-class first-touch head. A path is BUY
+when the upper barrier is touched before the lower barrier, SELL in the inverse
+case, HOLD when neither is touched, and invalid when a gap exists or both are
+touched in the same one-minute candle. Barriers are 0.20% at 15 minutes and
+0.40% at 60 minutes.
+
+The local 20% validation block is subdivided into an earlier epoch-selection
+window and a later calibration window, with another 60-minute purge. Class
+weights come only from training. Temperature scaling comes only from selection.
+The final 20% test remains sealed until architecture, loss weights, barriers,
+and model capacity are frozen.
+
+The reserved test reached 51.90% and 54.32% balanced accuracy at 15m/60m. SELL
+precision reached 54.95% and 57.74%, while BUY precision remained 45.23% and
+44.09%. Return regression did not beat zero return, and no quantile interval
+cleared the cost-aware action threshold. The network therefore remains a
+read-only research advisor and is not connected to paper or live execution.
+See `tcn_neural_research_report.md` for the complete experiment ledger.
+
 ## Commands
 
 ```powershell

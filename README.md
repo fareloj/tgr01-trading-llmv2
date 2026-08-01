@@ -23,10 +23,10 @@ with reproducible evidence, safety properties, and known limitations.
 The latest [operational red-team report](RED_TEAM_REPORT_2026-08-01.md) covers
 the Electron/TUI command surface, prompt-injection defenses, process handling,
 dependency auditing, external RAG health, and a seven-scenario LLM safety
-matrix. It recorded `109` passing Python tests, `6` passing Node tests, zero npm
-vulnerabilities, and `7/7` LLM safety checks. Directional quality was `6/7`:
-the remaining review case is an overly conservative `HOLD` in a clean bearish
-scenario.
+matrix. The current acceptance records `189` passing Python tests, `6` passing
+Node tests, zero npm vulnerabilities, and `7/7` checks for both directional
+quality and safety. These checks validate contracts and failure behavior, not
+profitability.
 
 The [deterministic tool protocol report](LLM_TOOL_RED_TEAM_REPORT_2026-08-01.md)
 adds bounded LLM-requested analysis tools, objective market-event memory, and
@@ -228,7 +228,9 @@ An optional Docker-based retrieval service can index this repository using:
 The trading client fixes the corpus filter, bounds query/result sizes, rejects
 foreign-corpus results, security-flagged chunks, and prompt-injection phrases
 detected locally in retrieved text. It labels every accepted chunk as untrusted,
-records retrieval metadata, and fails open when the service is down.
+records retrieval metadata, and fails open when the service is down. If the
+optional CUDA reranker times out, the client retries once without reranking and
+records `retrieval_mode` plus `fallback_reason` in the audit trail.
 "Fail open" here means trading analysis continues without RAG evidence; it does
 not mean an order bypasses risk checks.
 
@@ -362,22 +364,33 @@ CUDA execution was verified on the local RTX 3060 with a real tensor operation;
 model checkpoints must record the exact Torch, CUDA, feature-schema, dataset,
 and split versions before they can be compared.
 
-The first neural candidate is a Temporal Convolutional Network (TCN). It reads
-240 consecutive one-minute feature rows through causal dilated convolutions;
-no layer can inspect a future candle. Instead of directly predicting an order,
-it estimates the 10th, 50th, and 90th percentiles of the 15/60-minute future
-return. Python derives a candidate only when the complete uncertainty interval
-clears estimated costs and the minimum edge.
+The neural research model is a multi-task Temporal Convolutional Network (TCN).
+It reads 240 consecutive one-minute feature rows through causal dilated
+convolutions; no layer can inspect a future candle. It estimates p10/p50/p90
+returns and calibrated first-touch SELL/HOLD/BUY probabilities at 15/60 minutes.
+It is a read-only evidence provider, not an order generator.
 
 ```powershell
-py -3.11 .\backend\tests\train_tcn.py --device cuda
+py -3.11 .\backend\tests\build_barrier_targets.py `
+  .\backend\reports\binance_full_dataset.csv `
+  --output .\backend\reports\binance_barrier_targets.npz `
+  --horizons 15 60 --barrier-pct 0.20 0.40
+
+py -3.11 .\backend\tests\build_barrier_targets.py `
+  .\backend\reports\mb_tcn_dataset.csv `
+  --output .\backend\reports\mb_barrier_targets.npz `
+  --horizons 15 60 --barrier-pct 0.20 0.40
+
+py -3.11 .\backend\tests\train_tcn.py --device cuda `
+  --direction-target-mode barrier
 
 # Explicitly open the untouched local test partition only after freezing the run
 py -3.11 .\backend\tests\train_tcn.py --device cuda --evaluate-test
 ```
 
 Global BTCUSDT pretraining and BTC/BRL fine-tuning use independent chronological
-splits. The scaler is fitted on global training data only, sequence windows
+splits. Local selection, probability calibration, and final test windows are
+also disjoint. The scaler is fitted on training data only, sequence windows
 cannot cross a long outage, and checkpoints contain dataset SHA-256,
 split ranges, scaler state, feature schema, random seed, runtime versions, and
 training history. CUDA training keeps the feature matrix resident on the GPU
@@ -408,7 +421,7 @@ and pass persistence, cooldown, cost, and deterministic risk gates before an
 action is simulated. See
 [ml_dataset_and_training_plan.md](ml_dataset_and_training_plan.md).
 
-The first fixed TCN experiment did not pass that utility boundary. On `23,247`
+The first quantile-only TCN experiment did not pass that utility boundary. On `23,247`
 local test sequences, median-direction accuracy was `54.27%` at 15 minutes and
 `54.58%` at 60 minutes. The nominal 10th-to-90th percentile intervals covered
 `79.15%` and `79.77%` of outcomes. MAE improved over a zero-return forecast by
@@ -417,6 +430,15 @@ zero-return. No 15-minute interval cleared the configured `0.20%`
 actionable move, so the deterministic policy abstained on every evaluated row.
 The checkpoint remains offline research evidence and is not connected to the
 LLM, paper simulator, or execution pipeline.
+
+The later multi-task experiment replaced endpoint action labels with causal
+first-touch paths (+/-0.20% at 15m and +/-0.40% at 60m), while retaining return
+quantiles. On the reserved temporal test it reached 51.90%/54.32% balanced
+accuracy at 15m/60m. SELL precision was 54.95%/57.74%, but BUY precision was
+only 45.23%/44.09%, and return MAE remained worse than predicting zero. The
+calibrated `TCNAdvisor` therefore returns `RESEARCH_ONLY`,
+`execution_eligible=false`, and `can_authorize_order=false`. Full protocol and
+results are in [tcn_neural_research_report.md](tcn_neural_research_report.md).
 
 ## Reproducing The Latest Red Team
 
