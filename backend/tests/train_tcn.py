@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import gc
 import json
-import os
 import platform
 import sys
 from dataclasses import asdict, replace
@@ -19,12 +18,14 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from backend.ml.dataset import FEATURE_COLUMNS
+from backend.ml.checkpoints import save_tcn_checkpoint
 from backend.ml.sequences import (
     ArrayMarketData,
     DeviceMarketData,
     DeviceSequenceBatcher,
     MarketSequenceDataset,
     RobustFeatureScaler,
+    RobustTargetScaler,
     chronological_ranges,
     continuous_end_indices,
     load_market_arrays,
@@ -192,17 +193,6 @@ def _prepare_domain(
     return data, scaler, ranges, indices
 
 
-def _save_checkpoint(path: Path, model: QuantileTCN, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    try:
-        torch.save({"model_state": model.state_dict(), **payload}, temporary)
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
 def _fingerprint_dataset(path: Path) -> dict[str, object]:
     before = path.stat()
     digest = sha256_file(path)
@@ -287,6 +277,10 @@ def main() -> int:
         maximum_sequences=args.maximum_sequences,
     )
     print(f"global_sequences={dict((name, len(value)) for name, value in global_indices.items())}")
+    target_scaler = RobustTargetScaler.fit(
+        global_data.targets[global_indices["train"]],
+        HORIZONS,
+    )
     global_device_data = (
         DeviceMarketData.from_arrays(global_data, device)
         if device.type == "cuda" and not args.host_loader
@@ -321,25 +315,27 @@ def main() -> int:
             learning_rate=args.global_learning_rate,
             patience=max(1, min(2, args.global_epochs)),
         ),
+        target_scaler=target_scaler,
     )
     provenance = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "python": platform.python_version(),
-        "torch": torch.__version__,
-        "cuda_runtime": torch.version.cuda,
+        "torch": str(torch.__version__),
+        "cuda_runtime": str(torch.version.cuda) if torch.version.cuda else None,
         "device": str(device),
         "gpu": torch.cuda.get_device_name(0) if device.type == "cuda" else None,
         "seed": args.seed,
         "sequence_length": args.sequence_length,
         "tcn_config": tcn_config.as_dict(),
         "scaler": scaler.as_dict(),
+        "target_scaler": target_scaler.as_dict(),
         "global_dataset": global_fingerprint,
         "global_ranges": global_ranges.as_dict(),
         "global_sequences": {name: len(value) for name, value in global_indices.items()},
         "global_history": global_history,
     }
     _assert_dataset_unchanged(global_fingerprint)
-    _save_checkpoint(output_dir / "global_best.pt", model, provenance)
+    save_tcn_checkpoint(output_dir / "global_best.pt", model, provenance)
     del global_train, global_validation, global_device_data, global_data, global_indices
     gc.collect()
     if device.type == "cuda":
@@ -388,6 +384,18 @@ def main() -> int:
             learning_rate=args.local_learning_rate,
             patience=max(1, min(2, args.local_epochs)),
         ),
+        target_scaler=target_scaler,
+    )
+    validation_predictions, validation_targets = predict_quantiles(
+        model,
+        local_validation,
+        device=device,
+        target_scaler=target_scaler,
+    )
+    validation_quantile_metrics = quantile_metrics(
+        validation_predictions,
+        validation_targets,
+        HORIZONS,
     )
     checkpoint_payload = {
         **provenance,
@@ -395,6 +403,7 @@ def main() -> int:
         "local_ranges": local_ranges.as_dict(),
         "local_sequences": {name: len(value) for name, value in local_indices.items()},
         "local_history": local_history,
+        "validation_quantile_metrics": validation_quantile_metrics,
         "test_evaluated": bool(args.evaluate_test),
         "boundary": (
             "Offline research checkpoint only. It cannot place paper or live orders and remains "
@@ -415,7 +424,12 @@ def main() -> int:
             device=device,
             device_data=local_device_data,
         )
-        predictions, targets = predict_quantiles(model, test_loader, device=device)
+        predictions, targets = predict_quantiles(
+            model,
+            test_loader,
+            device=device,
+            target_scaler=target_scaler,
+        )
         report["test_quantile_metrics"] = quantile_metrics(predictions, targets, HORIZONS)
         report["test_policy_15m"] = _policy_metrics(
             predictions,
@@ -426,10 +440,11 @@ def main() -> int:
             actionable_move_pct=0.20,
             round_trip_cost_pct=0.15,
         )
-    _save_checkpoint(output_dir / "local_best.pt", model, checkpoint_payload)
+    save_tcn_checkpoint(output_dir / "local_best.pt", model, checkpoint_payload)
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "training_report.json"
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(json.dumps({"validation_quantile_metrics": validation_quantile_metrics}, indent=2))
     print(json.dumps(report.get("test_quantile_metrics", {}), indent=2))
     print(json.dumps(report.get("test_policy_15m", {}), indent=2))
     print(f"checkpoint={output_dir / 'local_best.pt'}")

@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+from backend.ml.sequences import RobustTargetScaler
 from backend.ml.tcn import QUANTILES, QuantileTCN, ordered_quantiles, quantile_loss
 
 
@@ -47,6 +48,7 @@ def _run_epoch(
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
     scaler: torch.amp.GradScaler | None,
+    target_scaler: RobustTargetScaler,
     gradient_clip: float,
 ) -> float:
     training = optimizer is not None
@@ -63,7 +65,7 @@ def _run_epoch(
             dtype=torch.float16,
             enabled=device.type == "cuda",
         ):
-            loss = quantile_loss(model(features), targets)
+            loss = quantile_loss(model(features), target_scaler.transform_tensor(targets))
         if training:
             assert optimizer is not None
             if scaler is not None:
@@ -91,6 +93,7 @@ def fit_stage(
     *,
     device: torch.device,
     config: StageConfig,
+    target_scaler: RobustTargetScaler,
 ) -> tuple[dict[str, torch.Tensor], list[dict[str, float]]]:
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -110,6 +113,7 @@ def fit_stage(
             device=device,
             optimizer=optimizer,
             scaler=scaler if device.type == "cuda" else None,
+            target_scaler=target_scaler,
             gradient_clip=config.gradient_clip,
         )
         with torch.inference_mode():
@@ -119,6 +123,7 @@ def fit_stage(
                 device=device,
                 optimizer=None,
                 scaler=None,
+                target_scaler=target_scaler,
                 gradient_clip=config.gradient_clip,
             )
         if not math.isfinite(train_loss) or not math.isfinite(validation_loss):
@@ -152,13 +157,16 @@ def predict_quantiles(
     loader: DataLoader,
     *,
     device: torch.device,
+    target_scaler: RobustTargetScaler,
 ) -> tuple[np.ndarray, np.ndarray]:
     model.eval()
     predictions = []
     targets = []
     with torch.inference_mode():
         for features, batch_targets in loader:
-            output = ordered_quantiles(model(features.to(device, non_blocking=True)))
+            output = ordered_quantiles(
+                target_scaler.inverse_tensor(model(features.to(device, non_blocking=True)))
+            )
             predictions.append(output.cpu().numpy())
             targets.append(batch_targets.cpu().numpy())
     return np.concatenate(predictions), np.concatenate(targets)

@@ -117,6 +117,63 @@ class RobustFeatureScaler:
         )
 
 
+@dataclass(frozen=True)
+class RobustTargetScaler:
+    center: np.ndarray
+    scale: np.ndarray
+    horizons_minutes: tuple[int, ...]
+
+    @classmethod
+    def fit(
+        cls,
+        targets: np.ndarray,
+        horizons_minutes: Iterable[int],
+        *,
+        maximum_fit_rows: int = 1_000_000,
+    ) -> "RobustTargetScaler":
+        horizons = tuple(int(item) for item in horizons_minutes)
+        if targets.ndim != 2 or targets.shape[1] != len(horizons):
+            raise ValueError("targets do not match horizons")
+        finite = targets[np.isfinite(targets).all(axis=1)]
+        if len(finite) == 0 or maximum_fit_rows <= 0:
+            raise ValueError("cannot fit target scaler without finite targets")
+        stride = max(1, int(np.ceil(len(finite) / maximum_fit_rows)))
+        sample = finite[::stride].astype(np.float64, copy=False)
+        center = np.median(sample, axis=0)
+        q25, q75 = np.quantile(sample, (0.25, 0.75), axis=0)
+        scale = np.where(q75 - q25 > 1e-8, q75 - q25, 1.0)
+        return cls(
+            center=center.astype(np.float32),
+            scale=scale.astype(np.float32),
+            horizons_minutes=horizons,
+        )
+
+    def transform_tensor(self, targets: torch.Tensor) -> torch.Tensor:
+        center = targets.new_tensor(self.center)
+        scale = targets.new_tensor(self.scale)
+        return (targets - center) / scale
+
+    def inverse_tensor(self, predictions: torch.Tensor) -> torch.Tensor:
+        center = predictions.new_tensor(self.center).view(1, -1, 1)
+        scale = predictions.new_tensor(self.scale).view(1, -1, 1)
+        return predictions * scale + center
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "center": self.center.tolist(),
+            "scale": self.scale.tolist(),
+            "horizons_minutes": list(self.horizons_minutes),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, object]) -> "RobustTargetScaler":
+        return cls(
+            center=np.asarray(value["center"], dtype=np.float32),
+            scale=np.asarray(value["scale"], dtype=np.float32),
+            horizons_minutes=tuple(int(item) for item in value["horizons_minutes"]),
+        )
+
+
 def load_market_arrays(path: Path, horizons_minutes: Iterable[int]) -> ArrayMarketData:
     horizons = tuple(int(item) for item in horizons_minutes)
     if not horizons or any(item <= 0 for item in horizons):

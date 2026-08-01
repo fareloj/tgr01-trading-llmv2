@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
+from backend.ml.checkpoints import load_tcn_checkpoint, save_tcn_checkpoint
 from backend.ml.dataset import FEATURE_COLUMNS
 from backend.ml.sequences import (
     ArrayMarketData,
@@ -10,6 +12,7 @@ from backend.ml.sequences import (
     DeviceSequenceBatcher,
     MarketSequenceDataset,
     RobustFeatureScaler,
+    RobustTargetScaler,
     chronological_ranges,
     continuous_end_indices,
     derive_continuous_segments,
@@ -107,6 +110,16 @@ def test_scaler_is_unchanged_by_validation_outlier():
     assert np.max(scaler.transform(validation)) <= scaler.clip_value
 
 
+def test_target_scaler_round_trips_each_horizon():
+    targets = np.array([[-1.0, -4.0], [0.0, 0.0], [1.0, 4.0]], dtype=np.float32)
+    scaler = RobustTargetScaler.fit(targets, (15, 60))
+    tensor = torch.from_numpy(targets)
+    normalized = scaler.transform_tensor(tensor)
+    restored = scaler.inverse_tensor(normalized.unsqueeze(-1)).squeeze(-1)
+
+    torch.testing.assert_close(restored, tensor)
+
+
 def test_causal_convolution_ignores_future_values():
     torch.manual_seed(7)
     layer = CausalConv1d(2, 3, kernel_size=3, padding=4, dilation=2)
@@ -189,7 +202,78 @@ def test_prediction_collects_device_resident_targets_on_cpu():
     )
     model = QuantileTCN(TCNConfig(input_channels=len(FEATURE_COLUMNS), channels=8)).cuda()
 
-    predictions, targets = predict_quantiles(model, batcher, device=torch.device("cuda"))
+    target_scaler = RobustTargetScaler.fit(data.targets, (15, 60))
+    predictions, targets = predict_quantiles(
+        model,
+        batcher,
+        device=torch.device("cuda"),
+        target_scaler=target_scaler,
+    )
 
     assert predictions.shape == (2, 2, 3)
     assert targets.shape == (2, 2)
+
+
+def test_checkpoint_round_trip_uses_safe_weights_only_loader(tmp_path):
+    config = TCNConfig(input_channels=len(FEATURE_COLUMNS), channels=8)
+    model = QuantileTCN(config)
+    feature_scaler = RobustFeatureScaler.fit(
+        np.arange(300 * len(FEATURE_COLUMNS), dtype=np.float32).reshape(300, -1)
+    )
+    target_scaler = RobustTargetScaler.fit(
+        np.array([[-1.0, -2.0], [0.0, 0.0], [1.0, 2.0]], dtype=np.float32),
+        (15, 60),
+    )
+    path = tmp_path / "model.pt"
+    save_tcn_checkpoint(
+        path,
+        model,
+        {
+            "tcn_config": config.as_dict(),
+            "scaler": feature_scaler.as_dict(),
+            "target_scaler": target_scaler.as_dict(),
+            "sequence_length": 240,
+            "torch": str(torch.__version__),
+        },
+    )
+
+    restored, restored_features, restored_targets, metadata = load_tcn_checkpoint(path)
+
+    assert isinstance(restored, QuantileTCN)
+    assert metadata["torch"] == str(torch.__version__)
+    np.testing.assert_allclose(restored_features.median, feature_scaler.median)
+    np.testing.assert_allclose(restored_targets.scale, target_scaler.scale)
+
+
+def test_checkpoint_rejects_missing_required_fields(tmp_path):
+    path = tmp_path / "incomplete.pt"
+    torch.save({"checkpoint_format_version": 1}, path)
+
+    with pytest.raises(ValueError, match="checkpoint is missing"):
+        load_tcn_checkpoint(path)
+
+
+def test_checkpoint_rejects_target_horizon_mismatch(tmp_path):
+    config = TCNConfig(input_channels=len(FEATURE_COLUMNS), channels=8)
+    model = QuantileTCN(config)
+    feature_scaler = RobustFeatureScaler.fit(
+        np.arange(300 * len(FEATURE_COLUMNS), dtype=np.float32).reshape(300, -1)
+    )
+    path = tmp_path / "mismatch.pt"
+    save_tcn_checkpoint(
+        path,
+        model,
+        {
+            "tcn_config": config.as_dict(),
+            "scaler": feature_scaler.as_dict(),
+            "target_scaler": {
+                "center": [0.0, 0.0],
+                "scale": [1.0, 1.0],
+                "horizons_minutes": [5, 30],
+            },
+            "sequence_length": 240,
+        },
+    )
+
+    with pytest.raises(ValueError, match="horizons do not match"):
+        load_tcn_checkpoint(path)
