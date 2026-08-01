@@ -20,6 +20,14 @@ version is research-only and has no real exchange write path.
 The paper/research scope has a documented [final acceptance](FINAL_ACCEPTANCE.md)
 with reproducible evidence, safety properties, and known limitations.
 
+The latest [operational red-team report](RED_TEAM_REPORT_2026-08-01.md) covers
+the Electron/TUI command surface, prompt-injection defenses, process handling,
+dependency auditing, external RAG health, and a seven-scenario LLM safety
+matrix. It recorded `109` passing Python tests, `6` passing Node tests, zero npm
+vulnerabilities, and `7/7` LLM safety checks. Directional quality was `6/7`:
+the remaining review case is an overly conservative `HOLD` in a clean bearish
+scenario.
+
 ## Interfaces
 
 Both interfaces operate the same allowlisted Python pipeline. Neither interface
@@ -245,6 +253,24 @@ python .\backend\tests\run_historical_llm_scenarios.py --name uptrend --from-loc
 
 Historical replay is for decision analysis. It does not alter the live paper
 portfolio.
+
+## Reproducing The Latest Red Team
+
+```powershell
+py -3.11 -m pytest -q -W error::pytest.PytestUnraisableExceptionWarning
+py -3.11 .\backend\tests\chaos_monkey.py
+py -3.11 .\backend\tests\redteam_llm_matrix.py
+py -3.11 .\backend\tests\query_external_rag.py --health
+
+Set-Location .\desktop
+npm test
+npm audit
+npm run test:electron
+```
+
+The Electron smoke test opens the compiled application rather than a browser
+preview. It validates navigation, all 17 allowlisted operations, report tabs,
+timeframe controls, IPC execution, renderer errors, and horizontal overflow.
 
 ## Setup
 

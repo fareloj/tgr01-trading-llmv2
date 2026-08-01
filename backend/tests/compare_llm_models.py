@@ -33,9 +33,12 @@ Acao: explique por que escolheu BUY, SELL ou HOLD.
 Base tecnica: cite RSI valor/status, MACD hist/status e preco.
 Contexto: cite market_stale, news_stale, news_risk e exposicao.
 Se data_health.is_news_stale=true, NAO chame noticias de recentes, mistas ou atuais; diga "noticias stale" e trate noticias como contexto fraco.
+Se data_health.is_news_stale=true e sugerir BUY/SELL, conviction deve ser no maximo 60.
 Se data_health.is_market_data_stale=true, retorne HOLD.
 BUY pode ser sugerido quando market_data esta fresco, RSI NAO esta OVERBOUGHT, MACD esta BULLISH_EXPANDING, news_risk nao e HIGH e exposicao permite.
 SELL pode ser sugerido quando market_data esta fresco, RSI NAO esta OVERSOLD, MACD esta BEARISH_EXPANDING, news_risk nao contradiz e ha exposicao relevante.
+News risk negativo HIGH contradiz BUY, mas pode confirmar SELL quando MACD esta BEARISH_EXPANDING, RSI nao esta OVERSOLD e existe exposicao.
+Nesse alinhamento bearish forte e fresco, prefira SELL a HOLD.
 Noticias stale nao bloqueiam automaticamente BUY/SELL no Decision Agent; elas apenas reduzem conviccao e devem ser citadas no Contexto.
 Voce deve SEMPRE retornar um JSON perfeito respeitando o schema exigido.
 """
@@ -143,9 +146,10 @@ def call_model(provider: str, model: str, payload: dict, prompt_mode: str) -> di
         if is_gpt_oss:
             # Groq's GPT-OSS models spend completion budget on reasoning before
             # emitting content. A small budget can produce no JSON at all.
-            # Keep the default below the common 8k TPM tier; override with
-            # GPT_OSS_MAX_COMPLETION_TOKENS if your Groq tier changes.
-            request["max_completion_tokens"] = int(os.getenv("GPT_OSS_MAX_COMPLETION_TOKENS", "6911"))
+            # Reserve room for the system prompt and market payload inside the
+            # common 8k TPM tier. The larger Playground value only works with
+            # very small messages; this comparison sends a complete payload.
+            request["max_completion_tokens"] = int(os.getenv("GPT_OSS_MAX_COMPLETION_TOKENS", "6000"))
             request["reasoning_effort"] = os.getenv("GPT_OSS_REASONING_EFFORT", "low")
         else:
             request["max_tokens"] = 220

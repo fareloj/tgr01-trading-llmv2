@@ -28,6 +28,34 @@ NEGATIVE_NEWS_TERMS = {
     "saidas",
     "suspende",
 }
+PROMPT_INJECTION_PATTERNS = (
+    re.compile(r"\bignore (all |any )?(previous|prior|system) instructions?\b"),
+    re.compile(r"\b(disregard|override) (the )?(previous|prior|system) instructions?\b"),
+    re.compile(r"\b(system prompt|developer message)\b"),
+    re.compile(r"\b(retorne|return|responda|respond) (apenas |only )?(buy|sell|hold)\b"),
+    re.compile(r"\b(fin(j|ja)|end) (as )?(instrucoes|instructions)\b"),
+)
+
+
+def normalize_untrusted_text(value: object) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value).casefold())
+    return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
+def detect_prompt_injection(value: object) -> list[str]:
+    normalized = normalize_untrusted_text(value)
+    return [pattern.pattern for pattern in PROMPT_INJECTION_PATTERNS if pattern.search(normalized)]
+
+
+def sanitize_news_context(recent_news: list) -> list:
+    """Remove instruction-like headline text while preserving temporal metadata."""
+    sanitized = []
+    for item in recent_news:
+        clean_item = dict(item)
+        if detect_prompt_injection(item.get("headline", "")):
+            clean_item["headline"] = "[REMOVED: instruction-like untrusted headline]"
+        sanitized.append(clean_item)
+    return sanitized
 
 
 def get_latest_news(hours: int = 24, limit: int = 5, as_of_timestamp: int | None = None) -> list:
@@ -78,11 +106,16 @@ def build_news_risk(recent_news: list) -> dict:
     """Detecta red flags simples em noticias sem usar LLM ou busca semantica."""
     matched_terms = set()
     matched_headlines = []
+    instruction_like_headlines = []
 
     for item in recent_news:
         headline = item.get("headline", "")
-        normalized = unicodedata.normalize("NFKD", str(headline).casefold())
-        normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+        normalized = normalize_untrusted_text(headline)
+        injection_patterns = detect_prompt_injection(headline)
+        if injection_patterns:
+            instruction_like_headlines.append(
+                {"source": item.get("source"), "matched_patterns": injection_patterns}
+            )
         tokens = set(re.findall(r"[a-z0-9]+", normalized))
         headline_terms = sorted(term for term in NEGATIVE_NEWS_TERMS if term in tokens)
         if not headline_terms:
@@ -96,7 +129,7 @@ def build_news_risk(recent_news: list) -> dict:
             }
         )
 
-    if len(matched_headlines) >= 2:
+    if instruction_like_headlines or len(matched_headlines) >= 2:
         risk_level = "HIGH"
     elif matched_headlines:
         risk_level = "ELEVATED"
@@ -108,6 +141,8 @@ def build_news_risk(recent_news: list) -> dict:
         "risk_level": risk_level,
         "matched_terms": sorted(matched_terms),
         "matched_headlines": matched_headlines,
+        "has_untrusted_instruction": bool(instruction_like_headlines),
+        "instruction_like_headlines": instruction_like_headlines,
     }
 
 def build_agent_payload(asset: str = "BTC/BRL", timeframe: str = "1m", as_of_timestamp: int | None = None) -> dict:
@@ -122,9 +157,10 @@ def build_agent_payload(asset: str = "BTC/BRL", timeframe: str = "1m", as_of_tim
         return technical_context
         
     # 2. Busca as últimas notícias reais/mockadas
-    recent_news = get_latest_news(hours=24, limit=5, as_of_timestamp=as_of_timestamp)
-    data_health = build_data_health(df, recent_news, now=as_of_timestamp)
-    news_risk = build_news_risk(recent_news)
+    raw_recent_news = get_latest_news(hours=24, limit=5, as_of_timestamp=as_of_timestamp)
+    data_health = build_data_health(df, raw_recent_news, now=as_of_timestamp)
+    news_risk = build_news_risk(raw_recent_news)
+    recent_news = sanitize_news_context(raw_recent_news)
     
     # 3. Busca saldos virtuais
     from backend.core import repository

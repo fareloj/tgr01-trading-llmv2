@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-sys.path.append(str(BASE_DIR.parent))
+sys.path.append(str(BASE_DIR))
 
 from backend.risk.risk_manager import RiskManager
 from backend.agents.contracts import DecisionOutput

@@ -151,10 +151,13 @@ class RiskManager:
         if data_health.get("is_market_data_stale"):
             return self._hold(f"Directional Gate: {action} bloqueado por market data stale")
 
+        news_risk = payload.get("news_risk", {})
+        if news_risk.get("has_untrusted_instruction"):
+            return self._hold(f"Directional Gate: {action} bloqueado por instrucao nao confiavel em noticias")
+
         if action == "BUY":
             if data_health.get("is_news_stale"):
                 return self._hold("Directional Gate: BUY bloqueado por noticias stale")
-            news_risk = payload.get("news_risk", {})
             if news_risk.get("has_negative_red_flag"):
                 terms = ", ".join(news_risk.get("matched_terms", [])) or "unknown"
                 return self._hold(f"Directional Gate: BUY bloqueado por news red flag ({terms})")

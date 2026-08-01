@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,34 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from backend.ops.commands import command_catalog
+from backend.ops.process_control import terminate_process_tree
+
+
+TUI_ACTION_ROWS = (
+    (
+        ("Diagnostico", "diagnostics"),
+        ("Workers", "start_workers"),
+        ("Preflight", "preflight"),
+        ("Paper 10", "paper10"),
+        ("Paper 30/30", "paper30"),
+        ("Paper 30/60", "paper30_60"),
+        ("Paper 100", "paper100"),
+    ),
+    (
+        ("Eval 100/30", "experiment100_30"),
+        ("Eval 100/60", "experiment100_60"),
+        ("Logs", "logs"),
+        ("Entradas", "entries"),
+        ("Futuro", "future"),
+        ("Readiness", "readiness"),
+        ("Revisao LLM", "llm_review"),
+    ),
+    (
+        ("RAG Docs", "rag_docs"),
+        ("RAG News", "rag_news"),
+        ("RAG Externo", "external_rag"),
+    ),
+)
 
 
 def age(seconds: int | None) -> str:
@@ -31,8 +60,9 @@ class TradingOpsTui(App):
     Header { background: #101820; color: #67e8b1; }
     #health { height: 7; layout: horizontal; }
     .metric { width: 1fr; border: round #34414e; padding: 0 1; margin: 0 1 0 0; }
-    #actions { height: auto; padding: 1 0; }
-    Button { margin: 0 1 1 0; min-width: 18; }
+    #actions { height: 13; padding: 1 0; }
+    .action-row { height: 3; }
+    Button { margin: 0 1 0 0; min-width: 16; }
     Button.-primary { background: #176b4a; }
     #since { width: 22; margin: 0 1 1 0; }
     #content { height: 1fr; }
@@ -63,23 +93,16 @@ class TradingOpsTui(App):
                 yield Static("CLOCK SKEW\n--", classes="metric", id="clock")
                 yield Static("EXPOSICAO\n--", classes="metric", id="exposure")
                 yield Static("RAG MEMORY\n--", classes="metric", id="rag")
-            with Horizontal(id="actions"):
-                yield Button("Workers", id="start_workers")
-                yield Button("Preflight", id="preflight", variant="primary")
-                yield Button("Paper 10", id="paper10")
-                yield Button("Paper 30", id="paper30")
-                yield Button("Eval 100/30", id="experiment100_30")
-                yield Button("Eval 100/60", id="experiment100_60")
-                yield Input(value="1", placeholder="since-id", id="since", type="integer")
-                yield Button("Logs", id="logs")
-                yield Button("Entradas", id="entries")
-                yield Button("Futuro", id="future")
-                yield Button("Readiness", id="readiness")
-                yield Button("Revisao LLM", id="llm_review")
-                yield Button("RAG Docs", id="rag_docs")
-                yield Button("RAG News", id="rag_news")
-                yield Button("RAG Externo", id="external_rag")
-                yield Button("Parar", id="stop", variant="error", disabled=True)
+            with Vertical(id="actions"):
+                for row_index, row in enumerate(TUI_ACTION_ROWS):
+                    with Horizontal(classes="action-row", id=f"action-row-{row_index}"):
+                        if row_index == 1:
+                            yield Input(value="1", placeholder="since-id", id="since", type="integer")
+                        for label, action in row:
+                            variant = "primary" if action == "preflight" else "default"
+                            yield Button(label, id=action, variant=variant)
+                        if row_index == 2:
+                            yield Button("Parar", id="stop", variant="error", disabled=True)
             with Horizontal(id="content"):
                 yield RichLog(id="output", highlight=True, markup=True, wrap=True)
                 yield DataTable(id="recent", zebra_stripes=True)
@@ -175,6 +198,7 @@ class TradingOpsTui(App):
                 cwd=PROJECT_DIR,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                start_new_session=os.name != "nt",
             )
             assert self.active_process.stdout
             async for raw_line in self.active_process.stdout:
@@ -193,8 +217,13 @@ class TradingOpsTui(App):
     async def stop_process(self) -> None:
         if not self.active_process:
             return
-        self.active_process.terminate()
+        process = self.active_process
         self.query_one("#output", RichLog).write(f"[yellow][STOP][/yellow] Encerrando {self.active_action}...")
+        await asyncio.to_thread(terminate_process_tree, process.pid)
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            process.kill()
 
 
 if __name__ == "__main__":

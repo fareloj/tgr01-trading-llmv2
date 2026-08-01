@@ -5,6 +5,7 @@ import {
   Download, FileSearch, Gauge, GitBranch, Play, RefreshCw, Settings,
   ShieldCheck, SlidersHorizontal, TerminalSquare, UsersRound
 } from "lucide-react";
+import { evaluationsToCsv } from "./csv.mjs";
 import "./styles.css";
 
 const previewState = {
@@ -50,12 +51,22 @@ const previewState = {
 
 const fallbackApi = {
   state: async () => previewState,
-  run: async () => ({ started: false }),
+  run: async () => { throw new Error("Acoes operacionais exigem a aplicacao Electron."); },
   stop: async () => ({ stopped: false }),
   onOutput: () => () => {},
   onStatus: () => () => {}
 };
+const isElectron = Boolean(window.tgrOps);
 const api = window.tgrOps || fallbackApi;
+
+const NAV_ITEMS = [
+  ["overview", "Overview", Gauge],
+  ["pipeline", "Pipeline", GitBranch],
+  ["decisions", "Decisions", FileSearch],
+  ["evaluations", "Evaluations", BarChart3],
+  ["rag-memory", "RAG Memory", Database],
+  ["settings", "Operations", Settings]
+];
 
 const money = value => Number(value || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const seconds = value => value == null ? "--" : value < 60 ? `${Math.round(value)}s` : `${Math.floor(value / 60)}m`;
@@ -90,6 +101,9 @@ function App() {
   const [sinceId, setSinceId] = useState("303");
   const [cycles, setCycles] = useState(30);
   const [interval, setIntervalSeconds] = useState(30);
+  const [activeSection, setActiveSection] = useState("overview");
+  const [evaluationTab, setEvaluationTab] = useState("future");
+  const [visibleHorizons, setVisibleHorizons] = useState(["5", "15", "30", "60"]);
 
   async function refresh() {
     try {
@@ -109,43 +123,30 @@ function App() {
     }
   }
 
+  const paperAction = cycles === 10
+    ? "paper10"
+    : cycles === 100
+      ? (interval === 30 ? "experiment100_30" : "paper100")
+      : (interval === 30 ? "paper30" : "paper30_60");
+
   function startPaper() {
-    if (cycles === 100) return run(interval === 30 ? "paper100_30" : "paper100");
-    return run(interval === 30 ? "paper30" : "paper30_60");
+    return run(paperAction);
+  }
+
+  function navigate(section) {
+    setActiveSection(section);
+    document.getElementById(section)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function toggleHorizon(horizon) {
+    setVisibleHorizons(current => current.includes(horizon)
+      ? current.filter(value => value !== horizon)
+      : [...current, horizon].sort((left, right) => Number(left) - Number(right)));
   }
 
   function exportEvaluationsCsv() {
-    if (!displayEntries.length) return;
-
-    const headers = ["ID", "Time", "Action", "Entry Price (BRL)", "RSI", "MACD", "ATR", "5m Status", "5m Move %", "15m Status", "15m Move %", "30m Status", "30m Move %", "60m Status", "60m Move %"];
-
-    const rows = displayEntries.map(entry => {
-      const tech = entry.technical || {};
-      const h5 = entry.horizons?.["5"] || {};
-      const h15 = entry.horizons?.["15"] || {};
-      const h30 = entry.horizons?.["30"] || {};
-      const h60 = entry.horizons?.["60"] || {};
-
-      return [
-        entry.id,
-        localTime(entry.timestamp),
-        entry.action || entry.llm_action,
-        entry.execution_price || "",
-        tech.rsi_value ?? "",
-        tech.macd_status || "",
-        tech.volatility_atr ?? "",
-        h5.status || "",
-        h5.move_pct || "",
-        h15.status || "",
-        h15.move_pct || "",
-        h30.status || "",
-        h30.move_pct || "",
-        h60.status || "",
-        h60.move_pct || ""
-      ].join(",");
-    });
-
-    const csvContent = [headers.join(","), ...rows].join("\n");
+    if (!filteredEntries.length) return;
+    const csvContent = evaluationsToCsv(filteredEntries, visibleHorizons, localTime);
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -154,6 +155,7 @@ function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   useEffect(() => {
@@ -183,6 +185,11 @@ function App() {
     ...log, kind: log.action === "BUY" || log.action === "SELL" ? "approved" : log.llm_action === "BUY" || log.llm_action === "SELL" ? "blocked" : "observed",
     technical: log.snapshot?.technical || {}, horizons: {}
   }));
+  const filteredEntries = displayEntries.filter(entry => {
+    if (evaluationTab === "approved") return entry.kind === "approved";
+    if (evaluationTab === "blocked") return entry.kind === "blocked";
+    return true;
+  });
   const healthyWorkers = Object.values(workers).filter(worker => worker.status === "healthy").length;
   const terminalLines = useMemo(() => output.split("\n").filter(Boolean).slice(-45), [output]);
 
@@ -190,12 +197,11 @@ function App() {
     <aside className="sidebar">
       <div className="brand"><strong>TGR-01</strong><span>Trading LLM V2</span><em>PAPER TRADING CONSOLE</em></div>
       <nav>
-        <a className="active"><Gauge size={15} />Overview</a>
-        <a><GitBranch size={15} />Pipeline</a>
-        <a><FileSearch size={15} />Decisions</a>
-        <a><BarChart3 size={15} />Evaluations</a>
-        <a><Database size={15} />RAG Memory</a>
-        <a><Settings size={15} />Settings</a>
+        {NAV_ITEMS.map(([section, label, Icon]) => (
+          <button key={section} data-section={section} className={activeSection === section ? "active" : ""} onClick={() => navigate(section)}>
+            <Icon size={15} />{label}
+          </button>
+        ))}
       </nav>
       <div className="side-meta">
         <div><Database size={14} /><span>Environment<strong>PAPER MODE</strong></span></div>
@@ -206,7 +212,7 @@ function App() {
     </aside>
 
     <main className="main-area">
-      <header className="infra-bar">
+      <header className="infra-bar" id="overview">
         <TopStatus icon={Gauge} label="Mode" value="PAPER" />
         <TopStatus icon={Database} label="Database" value={state.database?.backend || "PostgreSQL"} detail="Connected" />
         <TopStatus icon={UsersRound} label="Workers" value={`${healthyWorkers} / 2 Healthy`} />
@@ -216,6 +222,7 @@ function App() {
       </header>
 
       {error && <div className="error-banner">{error}</div>}
+      {!isElectron && <div className="preview-banner">Browser preview: dados demonstrativos em modo somente leitura. Abra o Electron para executar comandos.</div>}
 
       <section className="metric-strip">
         <MetricCard title="price_worker"><strong><StatusDot tone={healthTone(workers.price_worker?.status)} />{workers.price_worker?.status || "--"}</strong><span>Last heartbeat</span><p>{seconds(workers.price_worker?.age_seconds)} ago</p></MetricCard>
@@ -226,20 +233,20 @@ function App() {
       </section>
 
       <section className="primary-grid">
-        <article className="panel pipeline">
+        <article className="panel pipeline" id="pipeline">
           <div className="panel-heading"><h2><Play size={15} />Pipeline Run</h2><span>{running ? activeAction : "idle"}</span></div>
           <div className="control-row">
-            <label>Cycles <span className="segmented"><button className={cycles === 30 ? "selected" : ""} onClick={() => setCycles(30)}>30</button><button className={cycles === 100 ? "selected" : ""} onClick={() => setCycles(100)}>100</button></span></label>
-            <label>Interval <span className="segmented"><button className={interval === 30 ? "selected" : ""} onClick={() => setIntervalSeconds(30)}>30s</button><button className={interval === 60 ? "selected" : ""} onClick={() => setIntervalSeconds(60)}>60s</button></span></label>
-            <button onClick={() => run("preflight")} disabled={running}><ShieldCheck size={14} />Preflight</button>
-            <button className="primary" onClick={startPaper} disabled={running}><Play size={14} />Start Paper Run</button>
-            <button className="danger" title="Stop Paper Run" aria-label="Stop Paper Run" onClick={() => api.stop()} disabled={!running}><CircleStop size={14} /></button>
+            <label>Cycles <span className="segmented"><button data-cycles="10" className={cycles === 10 ? "selected" : ""} onClick={() => { setCycles(10); setIntervalSeconds(30); }}>10</button><button data-cycles="30" className={cycles === 30 ? "selected" : ""} onClick={() => setCycles(30)}>30</button><button data-cycles="100" className={cycles === 100 ? "selected" : ""} onClick={() => setCycles(100)}>100</button></span></label>
+            <label>Interval <span className="segmented"><button data-interval="30" className={interval === 30 ? "selected" : ""} onClick={() => setIntervalSeconds(30)}>30s</button><button data-interval="60" className={interval === 60 ? "selected" : ""} onClick={() => setIntervalSeconds(60)} disabled={cycles === 10} title={cycles === 10 ? "Paper 10 usa intervalo fixo de 30s" : undefined}>60s</button></span></label>
+            <button data-action="preflight" onClick={() => run("preflight")} disabled={running || !isElectron}><ShieldCheck size={14} />Preflight</button>
+            <button data-action={paperAction} className="primary" onClick={startPaper} disabled={running || !isElectron}><Play size={14} />Start Paper Run</button>
+            <button className="danger" title="Stop Paper Run" aria-label="Stop Paper Run" onClick={() => api.stop()} disabled={!running || !isElectron}><CircleStop size={14} /></button>
           </div>
-          <div className="progress-line"><span>Progress</span><strong>{running ? activeAction : "Ready"}</strong><i><b style={{ width: running ? "34%" : "0%" }} /></i></div>
+          <div className="progress-line"><span>Status</span><strong>{running ? activeAction : "Ready"}</strong><i className={running ? "indeterminate" : ""}><b /></i></div>
           <pre className="terminal">{terminalLines.map((line, index) => <span key={`${index}-${line}`}><em>[OPS]</em> {line}</span>)}</pre>
         </article>
 
-        <article className="panel audit">
+        <article className="panel audit" id="decisions">
           <div className="panel-heading"><h2><SlidersHorizontal size={15} />Decision Audit (Latest)</h2><span>ID: {latest.id || "--"} · {localTime(latest.timestamp)}</span></div>
           <div className="audit-top">
             <div><small>LLM Action</small><strong>{latest.llm_action || "--"}</strong></div>
@@ -269,39 +276,51 @@ function App() {
         </article>
       </section>
 
-      <section className="panel eval-panel">
+      <section className="panel eval-panel" id="evaluations">
         <div className="panel-heading">
-          <div className="tabs"><b>Approved Orders</b><b>Blocked Orders</b><b className="active">Future Evaluation</b></div>
+          <div className="tabs" role="tablist" aria-label="Evaluation filters">
+            <button role="tab" data-evaluation-tab="approved" aria-selected={evaluationTab === "approved"} className={evaluationTab === "approved" ? "active" : ""} onClick={() => setEvaluationTab("approved")}>Approved Orders</button>
+            <button role="tab" data-evaluation-tab="blocked" aria-selected={evaluationTab === "blocked"} className={evaluationTab === "blocked" ? "active" : ""} onClick={() => setEvaluationTab("blocked")}>Blocked Orders</button>
+            <button role="tab" data-evaluation-tab="future" aria-selected={evaluationTab === "future"} className={evaluationTab === "future" ? "active" : ""} onClick={() => setEvaluationTab("future")}>Future Evaluation</button>
+          </div>
           <div className="timeframes" style={{ alignItems: "center" }}>
-            Timeframes: <span>☑ 5m</span><span>☑ 15m</span><span>☑ 30m</span><span>☑ 60m</span>
-            <button onClick={exportEvaluationsCsv} disabled={!displayEntries.length} style={{ marginLeft: "8px", padding: "4px 8px" }} title="Export as CSV"><Download size={12} /> Export CSV</button>
+            <span>Timeframes:</span>
+            {["5", "15", "30", "60"].map(horizon => (
+              <label key={horizon}><input type="checkbox" data-horizon={horizon} checked={visibleHorizons.includes(horizon)} onChange={() => toggleHorizon(horizon)} />{horizon}m</label>
+            ))}
+            <button onClick={exportEvaluationsCsv} disabled={!filteredEntries.length || !visibleHorizons.length} title="Export as CSV"><Download size={12} />Export CSV</button>
           </div>
         </div>
         <table>
-          <thead><tr><th>ID</th><th>Time</th><th>Action</th><th>Entry Price (BRL)</th><th>Context (Indicators)</th><th>5m</th><th>15m</th><th>30m</th><th>60m</th></tr></thead>
-          <tbody>{displayEntries.map(entry => {
+          <thead><tr><th>ID</th><th>Time</th><th>Action</th><th>Entry Price (BRL)</th><th>Context (Indicators)</th>{visibleHorizons.map(horizon => <th key={horizon}>{horizon}m</th>)}</tr></thead>
+          <tbody>{filteredEntries.map(entry => {
             const tech = entry.technical || {};
             const blocked = entry.kind === "blocked";
             return <tr key={entry.id}>
               <td>{entry.id}</td><td>{localTime(entry.timestamp)}</td><td><b className={entry.action?.toLowerCase()}>{entry.action || entry.llm_action}</b></td>
               <td>{entry.execution_price ? money(entry.execution_price) : "--"}</td>
               <td>RSI {tech.rsi_value ?? "--"} | MACD {tech.macd_status || "--"} | ATR {tech.volatility_atr ?? "--"}</td>
-              {["5", "15", "30", "60"].map(horizon => <td key={horizon}><HorizonCell result={entry.horizons?.[horizon]} blocked={blocked} /></td>)}
+              {visibleHorizons.map(horizon => <td key={horizon}><HorizonCell result={entry.horizons?.[horizon]} blocked={blocked} /></td>)}
             </tr>;
           })}</tbody>
         </table>
-        <footer><span>Showing {displayEntries.length} evaluated decisions</span><span className="legend"><b className="hit">● HIT</b><b className="open">● OPEN</b><b className="cooldown">● COOLDOWN</b></span></footer>
+        <footer><span>Showing {filteredEntries.length} evaluated decisions</span><span className="legend"><b className="hit">HIT</b><b className="open">OPEN</b><b className="cooldown">COOLDOWN</b></span></footer>
       </section>
 
-      <section className="ops-footer">
+      <section className="ops-footer" id="settings">
         <label>Reports since ID <input value={sinceId} onChange={event => setSinceId(event.target.value.replace(/\D/g, ""))} /></label>
         <div>
-          <button onClick={() => run("startWorkers")} disabled={running}><Activity size={13} />Workers</button>
-          <button onClick={() => run("readiness")} disabled={running}><CheckCircle2 size={13} />Readiness</button>
-          <button onClick={() => run("ragDocs")} disabled={running}><Brain size={13} />RAG Docs</button>
-          <button onClick={() => run("ragNews")} disabled={running}><Brain size={13} />RAG News</button>
-          <button onClick={() => run("externalRag")} disabled={running}><Brain size={13} />External RAG</button>
-          <button onClick={() => run("analyzeEntries")} disabled={running}><FileSearch size={13} />Entries</button>
+          <button data-action="diagnostics" onClick={() => run("diagnostics")} disabled={running || !isElectron}><Database size={13} />Diagnostics</button>
+          <button data-action="startWorkers" onClick={() => run("startWorkers")} disabled={running || !isElectron}><Activity size={13} />Workers</button>
+          <button data-action="analyzeLogs" onClick={() => run("analyzeLogs")} disabled={running || !isElectron}><FileSearch size={13} />Logs</button>
+          <button data-action="analyzeEntries" onClick={() => run("analyzeEntries")} disabled={running || !isElectron}><FileSearch size={13} />Entries</button>
+          <button data-action="evaluate" onClick={() => run("evaluate")} disabled={running || !isElectron}><BarChart3 size={13} />Future</button>
+          <button data-action="llmReview" onClick={() => run("llmReview")} disabled={running || !isElectron}><Brain size={13} />LLM Review</button>
+          <button data-action="experiment100_60" onClick={() => run("experiment100_60")} disabled={running || !isElectron}><Play size={13} />Experiment 100/60</button>
+          <button data-action="readiness" onClick={() => run("readiness")} disabled={running || !isElectron}><CheckCircle2 size={13} />Readiness</button>
+          <button data-action="ragDocs" onClick={() => run("ragDocs")} disabled={running || !isElectron}><Brain size={13} />RAG Docs</button>
+          <button data-action="ragNews" onClick={() => run("ragNews")} disabled={running || !isElectron}><Brain size={13} />RAG News</button>
+          <button id="rag-memory" data-action="externalRag" onClick={() => run("externalRag")} disabled={running || !isElectron}><Brain size={13} />External RAG</button>
         </div>
       </section>
     </main>

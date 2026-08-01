@@ -6,6 +6,8 @@ import pytest
 
 from backend.ops.commands import command_catalog, safe_since_id
 from backend.ops.run_action import build_execution_plan, execute_action
+from backend.ops.process_control import terminate_process_tree
+from backend.tui import TUI_ACTION_ROWS
 
 
 class FakeResult:
@@ -73,6 +75,24 @@ def test_catalog_only_contains_python_script_paths():
     for spec in command_catalog("303").values():
         assert spec.args
         assert spec.args[0].endswith(".py")
+
+
+def test_tui_exposes_the_complete_operational_catalog():
+    tui_actions = {action for row in TUI_ACTION_ROWS for _label, action in row}
+    assert tui_actions == set(command_catalog("303"))
+
+
+def test_windows_process_stop_targets_the_complete_tree():
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeResult(0)
+
+    terminate_process_tree(4321, platform="win32", run_command=fake_run)
+
+    assert calls[0][0] == ["taskkill", "/PID", "4321", "/T", "/F"]
+    assert calls[0][1]["check"] is False
 
 
 def test_database_diagnostics_entrypoint_runs_from_project_root():
