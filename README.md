@@ -30,7 +30,7 @@ scenario.
 
 The [deterministic tool protocol report](LLM_TOOL_RED_TEAM_REPORT_2026-08-01.md)
 adds bounded LLM-requested analysis tools, objective market-event memory, and
-historical model/prompt benchmarks. The expanded suite records `122` passing
+historical model/prompt benchmarks. The expanded suite records `141` passing
 Python tests. This layer remains opt-in and paper-only.
 
 ## Interfaces
@@ -304,6 +304,37 @@ python .\backend\tests\benchmark_tool_augmented_llm.py --cycles 3 `
 The research basis and exact safety boundaries are documented in
 [btc_trading_tools_research.md](btc_trading_tools_research.md).
 
+## Causal ML Dataset And Baselines
+
+The repository can now build an offline machine-learning dataset without
+letting feature rows see future candles. It computes causal price, trend,
+volatility, volume, channel, and drawdown features, then creates exact 15/60
+minute future labels after an estimated round-trip cost and minimum edge.
+
+Short missing-candle intervals are represented explicitly with zero-volume
+synthetic candles for indicator continuity. Large gaps start new segments.
+Decision rows and future labels still require observed exchange candles, and
+every row records its observed-data coverage.
+
+```powershell
+py -3.11 .\backend\tests\build_ml_dataset.py
+py -3.11 .\backend\tests\evaluate_ml_baselines.py
+```
+
+The evaluator uses chronological train/validation/test partitions and purges
+the tail of earlier partitions so labels cannot cross a split boundary. It also
+prevents overlapping fixed-horizon trades from being counted as independent
+profits. Four deterministic references are reported: always-HOLD, 60-minute
+momentum, EMA/MACD confirmation, and RSI mean reversion.
+
+The current local snapshot is not ready for learned-model experiments: it has
+`2,203` eligible rows across `8` calendar days. All action-taking baselines were
+negative after the configured cost in validation and test. The conservative
+gate requires at least `30,000` rows, `30` days, `1,000` rows per action label,
+and `80%` mean observed coverage before training code should be introduced.
+These are engineering safeguards, not a claim that passing them creates an
+edge. See [ml_dataset_and_training_plan.md](ml_dataset_and_training_plan.md).
+
 ## Reproducing The Latest Red Team
 
 ```powershell
@@ -460,6 +491,7 @@ backend/
   data/         price and news workers
   execution/    paper portfolio execution
   features/     indicators, payloads, dashboards
+  ml/           causal datasets, baselines, and training-readiness gates
   ops/          allowlisted TUI/Electron operations
   rag/          internal memory and external fail-open client
   risk/         deterministic Risk Manager
@@ -479,6 +511,7 @@ Implemented:
 - TUI and Electron operations surfaces;
 - deterministic and LLM-assisted review reports;
 - historical regime replay;
+- causal ML datasets, purged temporal splits, and deterministic baselines;
 - internal retrieval memory;
 - optional external hybrid RAG diagnostics;
 - defensive and adversarial tests.
