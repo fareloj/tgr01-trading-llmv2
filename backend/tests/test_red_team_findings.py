@@ -1,9 +1,9 @@
 """
 RED TEAM REGRESSION TESTS — TGR-01 Trading LLM V2
 ====================================================
-Cada teste aqui prova uma vulnerabilidade real no código atual.
-Um teste que FALHA aqui (no código atual) significa que o bug está PRESENTE.
-Um teste que PASSA significa que o comportamento está correto.
+Cada teste preserva uma propriedade de segurança derivada de um achado real.
+Um teste que FALHA significa que uma mitigação regrediu.
+Um teste que PASSA confirma que o comportamento defensivo continua ativo.
 
 Guardrails:
 - NUNCA reescrever um teste para fazê-lo passar.
@@ -154,26 +154,14 @@ def test_rt_production_code_uses_only_backend_package_imports():
 
 
 # ===========================================================================
-# ACHADO 4 (ALTO — Dual Import / Cooldown Gate deve funcionar apesar do dual path)
+# ACHADO 4 (ALTO — Cooldown deve usar o repositório canônico)
 # ===========================================================================
 
-def test_rt_cooldown_gate_resolves_via_wrong_engine_path():
-    """
-    ACHADO 4 — Teste de consequência prática do ACHADO 3.
-
-    Apesar do dual import path (ACHADO 3), o conftest.py patcha AMBOS os módulos
-    (linhas 33-35). Este teste verifica se o patch é suficiente para que o
-    cooldown gate do risk_manager veja os dados inseridos via backend.core.repository.
-
-    Se o cooldown NÃO bloquear um BUY recente, o patch falhou e há engine divergente.
-
-    RESULTADO ESPERADO: O teste PASSA (cooldown funciona), provando que o conftest
-    consegue patchá-los. Mas o ACHADO 3 documenta que esta proteção é frágil e
-    pode quebrar se o patch não cobrir todos os caminhos de import.
-    """
+def test_rt_cooldown_gate_uses_canonical_repository():
+    """Cooldown must observe trades written through backend.core.repository."""
     from backend.risk.risk_manager import RiskManager
 
-    # Insere um BUY recente via backend.core.repository (engine patched pelo conftest)
+    # Insere um BUY recente pelo namespace canônico.
     repository.add_trade_log_autocommit({
         "timestamp": int(time.time()),  # agora — dentro do cooldown de 15min
         "llm_action": "BUY",
@@ -207,8 +195,7 @@ def test_rt_cooldown_gate_resolves_via_wrong_engine_path():
     assert result["action"] == "HOLD", (
         f"COOLDOWN BYPASS! evaluate_order retornou '{result['action']}' "
         f"mesmo com BUY recente registrado.\n"
-        f"Causa provável: 'from core import repository' em risk_manager._cooldown_gate "
-        f"usa engine diferente do patched pelo conftest (ACHADO 3).\n"
+        "O Risk Manager não observou o trade persistido pelo repositório canônico.\n"
         f"Motivo retornado: {result['reason']}"
     )
     assert "Cooldown" in result["reason"], (
@@ -217,31 +204,11 @@ def test_rt_cooldown_gate_resolves_via_wrong_engine_path():
 
 
 # ===========================================================================
-# ACHADO 5 (ALTO — Directional Gate missing: RSI OVERSOLD + MACD BEARISH não bloqueia BUY)
+# ACHADO 5 (ALTO — RSI OVERSOLD exige confirmação bullish para BUY)
 # ===========================================================================
 
-def test_rt_directional_gate_rsi_oversold_macd_bearish_expanding_blocks_buy():
-    """
-    ACHADO 5 — BUY aprovado com RSI OVERSOLD + MACD BEARISH_EXPANDING.
-
-    O briefing cita explicitamente: "RSI OVERSOLD + MACD BEARISH_EXPANDING (não pode virar BUY)".
-
-    O directional_gate em risk_manager.py bloqueia:
-    - BUY com RSI OVERBOUGHT (linha 161-162) ✓
-    - BUY com MACD BEARISH_EXPANDING (linha 163-164) ✓
-    - BUY com ATR EXTREME (linha 165-166) ✓
-
-    MAS NÃO bloqueia:
-    - BUY com RSI OVERSOLD (faca caindo, momentum descendente)
-
-    Combinação RSI OVERSOLD + MACD BEARISH_EXPANDING deveria bloquear BUY.
-    O MACD já bloqueia sozinho, mas o teste valida a combinação explicitamente
-    citada no briefing para garantir que não haja nenhum bypass.
-
-    RESULTADO: O MACD BEARISH_EXPANDING bloqueia BUY independentemente do RSI.
-    O teste documenta que a proteção existe pelo MACD, mas RSI OVERSOLD sozinho
-    não bloquearia BUY — isso é o achado latente.
-    """
+def test_rt_directional_gate_requires_bullish_confirmation_for_oversold_buy():
+    """OVERSOLD cannot become BUY without explicit bullish MACD confirmation."""
     from backend.risk.risk_manager import RiskManager
 
     payload_both = {
@@ -267,8 +234,7 @@ def test_rt_directional_gate_rsi_oversold_macd_bearish_expanding_blocks_buy():
         "A combinação RSI OVERSOLD + MACD BEARISH_EXPANDING é faca caindo."
     )
 
-    # AGORA: RSI OVERSOLD isolado (MACD neutro) — NÃO bloqueia BUY no código atual!
-    # Este é o achado latente: RSI OVERSOLD não está na lista de bloqueio de BUY.
+    # RSI OVERSOLD isolado com MACD neutro também deve falhar fechado.
     payload_oversold_only = {
         "technical_context": {
             "current_price": 100000.0,
@@ -284,17 +250,11 @@ def test_rt_directional_gate_rsi_oversold_macd_bearish_expanding_blocks_buy():
 
     result_oversold_only = rm.evaluate_order("BUY", 90, payload_oversold_only, current_exposure=10.0)
 
-    # ACHADO: RSI OVERSOLD sozinho NÃO bloqueia BUY no código atual.
-    # O directional_gate só bloqueia OVERBOUGHT para BUY (linha 161).
-    # Documentamos: se o MACD for neutro mas RSI for OVERSOLD, BUY pode passar.
-    # O assert abaixo DOCUMENTA o comportamento atual (RSI OVERSOLD não bloqueia BUY):
     assert result_oversold_only["action"] == "HOLD", (
-        f"ACHADO 5 CONFIRMADO: BUY aprovado com RSI OVERSOLD + MACD NEUTRAL!\n"
+        f"REGRESSÃO: BUY aprovado com RSI OVERSOLD + MACD NEUTRAL!\n"
         f"  action={result_oversold_only['action']}, executed_size={result_oversold_only['executed_size']}\n"
         f"  reason={result_oversold_only['reason']}\n"
-        "RSI OVERSOLD isolado não bloqueia BUY no directional_gate.\n"
-        "O código só bloqueia RSI OVERBOUGHT para BUY (linha 161 do risk_manager.py).\n"
-        "Um LLM convicto (90%) pode comprar numa faca caindo se o MACD for neutro."
+        "O directional gate deve exigir confirmação MACD bullish."
     )
 
 
@@ -455,23 +415,11 @@ def test_rt_pool_exhaustion_raises_explicit_error_not_silent_deadlock():
 
 
 # ===========================================================================
-# ACHADO 9 (MÉDIO — RAG: decision_memory mistura import paths)
+# ACHADO 9 (MÉDIO — RAG deve compartilhar o repositório canônico)
 # ===========================================================================
 
-def test_rt_rag_decision_memory_import_path_consistency():
-    """
-    ACHADO 9 — decision_memory.py mistura 'from core import repository' (linhas 100, 191)
-    com 'from backend.core import repository' (via rag_store.py que ele chama).
-
-    Se os módulos 'core' e 'backend.core' são distintos (ACHADO 3),
-    então decision_memory pode escrever chunks via backend.core.repository
-    mas ler trade_logs via core.repository, potencialmente usando engines diferentes.
-
-    Este teste verifica que as funções de decision_memory que usam 'from core import repository'
-    conseguem acessar dados inseridos via 'from backend.core import repository'.
-
-    Se falhar com ValueError "not found", confirma o engine divergente do ACHADO 3.
-    """
+def test_rt_rag_decision_memory_uses_canonical_repository():
+    """Decision memory must read writes made through backend.core.repository."""
     from backend.rag import decision_memory
     import json
 
@@ -515,11 +463,10 @@ def test_rt_rag_decision_memory_import_path_consistency():
         loaded_snapshot, metadata_row = decision_memory.load_trade_log_snapshot(log_id)
     except ValueError as e:
         raise AssertionError(
-            f"ACHADO 9 CONFIRMADO: decision_memory.load_trade_log_snapshot não encontrou\n"
+            f"REGRESSÃO: decision_memory.load_trade_log_snapshot não encontrou\n"
             f"o trade_log {log_id} inserido via backend.core.repository.\n"
             f"Erro: {e}\n"
-            f"Causa: 'from core import repository' em decision_memory.py usa engine\n"
-            f"diferente do que 'from backend.core import repository' (ACHADO 3)."
+            "O módulo RAG deve compartilhar o repositório canônico backend.core."
         )
 
     assert loaded_snapshot["schema_version"] == 1

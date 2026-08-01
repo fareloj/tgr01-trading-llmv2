@@ -17,6 +17,9 @@ and records the complete decision trail in PostgreSQL.
 This is not a promise of profit and is not a live trading product. The current
 version is research-only and has no real exchange write path.
 
+The paper/research scope has a documented [final acceptance](FINAL_ACCEPTANCE.md)
+with reproducible evidence, safety properties, and known limitations.
+
 ## Interfaces
 
 Both interfaces operate the same allowlisted Python pipeline. Neither interface
