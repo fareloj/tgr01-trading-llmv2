@@ -42,7 +42,6 @@ from backend.ml.training import (
     fit_direction_class_weights,
     fit_direction_temperatures,
     predict_outputs,
-    predict_quantiles,
     quantile_metrics,
     set_reproducible_seed,
 )
@@ -576,13 +575,20 @@ def main() -> int:
             device=device,
             device_data=local_device_data,
         )
-        predictions, targets = predict_quantiles(
+        predictions, test_direction_logits, targets, test_direction_targets = predict_outputs(
             model,
             test_loader,
             device=device,
             target_scaler=target_scaler,
         )
         report["test_quantile_metrics"] = quantile_metrics(predictions, targets, HORIZONS)
+        report["test_direction_metrics"] = direction_metrics(
+            apply_direction_temperatures(test_direction_logits, direction_temperatures),
+            targets,
+            HORIZONS,
+            actionable_move_pct=0.20,
+            actual_classes=test_direction_targets,
+        )
         report["test_policy_15m"] = _policy_metrics(
             predictions,
             targets,
