@@ -9,10 +9,11 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(str(BASE_DIR))
+PROJECT_DIR = BASE_DIR.parent
+sys.path.insert(0, str(PROJECT_DIR))
 
-from agents.contracts import DecisionOutput
-from features.payload_builder import build_agent_payload
+from backend.agents.contracts import DecisionOutput
+from backend.features.payload_builder import build_agent_payload
 
 load_dotenv(BASE_DIR / ".env")
 
@@ -90,11 +91,12 @@ def build_specific_decision_brief(payload: dict, action: str, reasoning: str) ->
     rsi = technical.get("rsi", {})
     macd = technical.get("macd", {})
     price = technical.get("current_price", "unknown")
+    bb = technical.get("bollinger_bands", {})
+    ema = technical.get("ema_crossover", {})
+    vol = technical.get("volume_profile", {})
+
     line_1 = f"Acao {action}: {reasoning}"
-    line_2 = (
-        f"Base tecnica: preco={price}, RSI={rsi.get('value')} {rsi.get('status')}, "
-        f"MACD={macd.get('histogram')} {macd.get('status')}."
-    )
+    line_2 = f"Base tecnica: preco={price}, RSI={rsi.get('value')} {rsi.get('status')}, MACD={macd.get('histogram')} {macd.get('status')}, Bollinger={bb.get('status')}, EMA={ema.get('status')}, VolSpike={vol.get('is_volume_spike')}."
     line_3 = (
         f"Contexto: market_stale={data_health.get('is_market_data_stale')}, "
         f"news_stale={data_health.get('is_news_stale')}, "
@@ -205,8 +207,22 @@ class DecisionAgent:
         O campo reasoning deve ser curto, com no maximo 20 palavras.
         O campo decision_brief deve ter EXATAMENTE 3 linhas curtas:
         Acao: explique por que escolheu BUY, SELL ou HOLD.
-        Base tecnica: cite RSI valor/status, MACD hist/status e preco.
+        Base tecnica: preco=<price>, RSI=<rsi_value> <rsi_status>, MACD=<macd_hist> <macd_status>, Bollinger=<bb_status>, EMA=<ema_status>, VolSpike=<is_volume_spike>
         Contexto: cite market_stale, news_stale, news_risk e exposicao.
+
+        Voce recebera no technical_context os seguintes novos indicadores adicionais:
+        - bollinger_bands: possui valores (upper, middle, lower) e status ("ABOVE_UPPER", "BELOW_LOWER", "INSIDE").
+        - ema_crossover: possui valores (ema9, ema21) e status ("BULLISH", "BEARISH", "BULLISH_CROSS", "BEARISH_CROSS").
+        - volume_profile: possui valores (current_volume, mean_volume, is_volume_spike, poc_price).
+
+        Esses indicadores devem influenciar sua decisao da seguinte forma:
+        - O status de Bollinger ABOVE_UPPER sugere condicao de sobrecompra (bearish), enquanto BELOW_LOWER sugere condicao de sobrevenda (bullish).
+        - O status de EMA Crossover BULLISH ou BULLISH_CROSS sugere momentum de compra, enquanto BEARISH ou BEARISH_CROSS sugere momentum de venda ou hold.
+        - Um volume spike (VolSpike=True) serve para verificar e confirmar o forte interesse ou forca da tendencia.
+
+        A linha "Base tecnica" do decision_brief deve ter EXATAMENTE este formato:
+        Base tecnica: preco=<price>, RSI=<rsi_value> <rsi_status>, MACD=<macd_hist> <macd_status>, Bollinger=<bb_status>, EMA=<ema_status>, VolSpike=<is_volume_spike>
+
         Se data_health.is_news_stale=true, NAO chame noticias de recentes, mistas ou atuais; diga "noticias stale" e trate noticias como contexto fraco.
         Se data_health.is_market_data_stale=true, retorne HOLD.
         RSI OVERSOLD sozinho NAO autoriza BUY. Se MACD estiver BEARISH_EXPANDING ou BEARISH_DIVERGENCE, prefira HOLD.

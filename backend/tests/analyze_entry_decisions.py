@@ -1,14 +1,18 @@
 import argparse
 import json
-import sqlite3
+import sys
 from collections import Counter
 from pathlib import Path
 
-from evaluate_decisions import classify, fetch_future_price, parse_horizons
+from sqlalchemy import select
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BACKEND_DIR / "trading_v2.db"
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+if str(PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_DIR))
 
+from backend.core import database
+from backend.core.db_models import trade_logs
+from backend.tests.evaluate_decisions import classify, fetch_future_price, parse_horizons
 
 def load_snapshot(raw: str | None) -> dict:
     if not raw:
@@ -19,12 +23,7 @@ def load_snapshot(raw: str | None) -> dict:
         return {}
 
 
-def has_column(cursor, table: str, column: str) -> bool:
-    cursor.execute(f"PRAGMA table_info({table})")
-    return column in {row["name"] for row in cursor.fetchall()}
-
-
-def entry_kind(row: sqlite3.Row) -> str:
+def entry_kind(row: dict) -> str:
     if row["action"] in {"BUY", "SELL"}:
         return "approved"
     if row["llm_action"] in {"BUY", "SELL"}:
@@ -32,62 +31,63 @@ def entry_kind(row: sqlite3.Row) -> str:
     return "ignored"
 
 
-def evaluation_base_price(row: sqlite3.Row) -> float:
-    if row["action"] in {"BUY", "SELL"} and "effective_price" in row.keys() and row["effective_price"]:
+def evaluation_base_price(row: dict) -> float:
+    if row["action"] in {"BUY", "SELL"} and row.get("effective_price"):
         return float(row["effective_price"])
     return float(row["execution_price"] or 0.0)
 
 
-def evaluate_entries(db_path: Path, since_id: int | None, horizons: list[int], threshold_pct: float) -> dict:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    where = "WHERE id >= ?" if since_id is not None else ""
-    params = (since_id,) if since_id is not None else ()
-    effective_price_select = ", effective_price" if has_column(cursor, "trade_logs", "effective_price") else ""
-    rows = cursor.execute(
-        f"""
-        SELECT id, timestamp, llm_action, llm_reasoning, action, llm_conviction,
-               system_reliability, final_confidence, executed_size, execution_price,
-               reasoning, payload_snapshot_json
-               {effective_price_select}
-        FROM trade_logs
-        {where}
-        ORDER BY id ASC
-        """,
-        params,
-    ).fetchall()
+def evaluate_entries(since_id: int | None, horizons: list[int], threshold_pct: float) -> dict:
+    stmt = select(
+        trade_logs.c.id,
+        trade_logs.c.timestamp,
+        trade_logs.c.llm_action,
+        trade_logs.c.llm_reasoning,
+        trade_logs.c.action,
+        trade_logs.c.llm_conviction,
+        trade_logs.c.system_reliability,
+        trade_logs.c.final_confidence,
+        trade_logs.c.executed_size,
+        trade_logs.c.execution_price,
+        trade_logs.c.effective_price,
+        trade_logs.c.reasoning,
+        trade_logs.c.payload_snapshot_json,
+    )
+    if since_id is not None:
+        stmt = stmt.where(trade_logs.c.id >= since_id)
+    stmt = stmt.order_by(trade_logs.c.id.asc())
 
     entries = []
-    for row in rows:
-        kind = entry_kind(row)
-        if kind == "ignored":
-            continue
-        snapshot = load_snapshot(row["payload_snapshot_json"])
-        technical = snapshot.get("technical", {})
-        item = {key: row[key] for key in row.keys() if key != "payload_snapshot_json"}
-        item["kind"] = kind
-        item["evaluation_base_price"] = evaluation_base_price(row)
-        item["technical"] = technical
-        item["news_risk"] = snapshot.get("news_risk", {})
-        item["data_health"] = snapshot.get("data_health", {})
-        item["horizons"] = {}
-        for horizon in horizons:
-            future = fetch_future_price(cursor, int(row["timestamp"]), horizon)
-            base_price = item["evaluation_base_price"]
-            if future is None or not base_price:
-                item["horizons"][str(horizon)] = {"status": "not_matured"}
+    with database.engine.connect() as conn:
+        rows = [dict(row._mapping) for row in conn.execute(stmt)]
+        for row in rows:
+            kind = entry_kind(row)
+            if kind == "ignored":
                 continue
-            move_pct = ((float(future["close"]) - base_price) / base_price) * 100.0
-            evaluated_action = row["action"] if kind == "approved" else "HOLD"
-            item["horizons"][str(horizon)] = {
-                "status": classify(evaluated_action, move_pct, threshold_pct),
-                "future_timestamp": int(future["timestamp"]),
-                "future_price": round(float(future["close"]), 2),
-                "move_pct": round(move_pct, 4),
-            }
-        entries.append(item)
-    conn.close()
+            snapshot = load_snapshot(row.pop("payload_snapshot_json", None))
+            technical = snapshot.get("technical", {})
+            item = dict(row)
+            item["kind"] = kind
+            item["evaluation_base_price"] = evaluation_base_price(row)
+            item["technical"] = technical
+            item["news_risk"] = snapshot.get("news_risk", {})
+            item["data_health"] = snapshot.get("data_health", {})
+            item["horizons"] = {}
+            for horizon in horizons:
+                future = fetch_future_price(conn, int(row["timestamp"]), horizon)
+                base_price = item["evaluation_base_price"]
+                if future is None or not base_price:
+                    item["horizons"][str(horizon)] = {"status": "not_matured"}
+                    continue
+                move_pct = ((float(future["close"]) - base_price) / base_price) * 100.0
+                evaluated_action = row["action"] if kind == "approved" else "HOLD"
+                item["horizons"][str(horizon)] = {
+                    "status": classify(evaluated_action, move_pct, threshold_pct),
+                    "future_timestamp": int(future["timestamp"]),
+                    "future_price": round(float(future["close"]), 2),
+                    "move_pct": round(move_pct, 4),
+                }
+            entries.append(item)
 
     approved = [entry for entry in entries if entry["kind"] == "approved"]
     blocked = [entry for entry in entries if entry["kind"] == "blocked"]
@@ -110,7 +110,7 @@ def evaluate_entries(db_path: Path, since_id: int | None, horizons: list[int], t
         )
 
     return {
-        "db_path": str(db_path.resolve()),
+        "db_path": database.get_database_label(),
         "since_id": since_id,
         "threshold_pct": threshold_pct,
         "horizons_minutes": horizons,
@@ -149,7 +149,6 @@ def print_report(report: dict):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Analyze approved and blocked entry decisions.")
-    parser.add_argument("--db", default=str(DB_PATH))
     parser.add_argument("--since-id", type=int, default=None)
     parser.add_argument("--horizons", default="5,15,30,60")
     parser.add_argument("--threshold", type=float, default=0.20)
@@ -159,7 +158,7 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    report = evaluate_entries(Path(args.db), args.since_id, parse_horizons(args.horizons), args.threshold)
+    report = evaluate_entries(args.since_id, parse_horizons(args.horizons), args.threshold)
     print_report(report)
     if args.json_out:
         output = Path(args.json_out)

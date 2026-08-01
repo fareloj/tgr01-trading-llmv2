@@ -1,84 +1,66 @@
 import argparse
-import sqlite3
+import sys
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BACKEND_DIR / "trading_v2.db"
+from sqlalchemy import delete, func, select
+
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+if str(PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_DIR))
+
+from backend.core import database
+from backend.core.db_models import news
 
 MOCK_SOURCES = {"Bloomberg", "CryptoPanic", "Exame", "InfoMoney"}
 REAL_SOURCES = {"CoinDesk", "Cointelegraph", "Decrypt"}
 
 
-def find_mock_news(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    placeholders = ",".join("?" for _ in MOCK_SOURCES)
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""
-        SELECT id, timestamp, source, headline
-        FROM news
-        WHERE source IN ({placeholders})
-        ORDER BY timestamp DESC
-        """,
-        tuple(sorted(MOCK_SOURCES)),
+def clean_mock_news(apply: bool):
+    candidates_stmt = (
+        select(news.c.id, news.c.timestamp, news.c.source, news.c.headline)
+        .where(news.c.source.in_(sorted(MOCK_SOURCES)))
+        .order_by(news.c.timestamp.desc())
     )
-    return cursor.fetchall()
-
-
-def summarize_real_sources(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    placeholders = ",".join("?" for _ in REAL_SOURCES)
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""
-        SELECT source, COUNT(*) AS count, MIN(timestamp) AS min_timestamp, MAX(timestamp) AS max_timestamp
-        FROM news
-        WHERE source IN ({placeholders})
-        GROUP BY source
-        ORDER BY source
-        """,
-        tuple(sorted(REAL_SOURCES)),
+    real_stmt = (
+        select(
+            news.c.source,
+            func.count().label("count"),
+            func.min(news.c.timestamp).label("min_timestamp"),
+            func.max(news.c.timestamp).label("max_timestamp"),
+        )
+        .where(news.c.source.in_(sorted(REAL_SOURCES)))
+        .group_by(news.c.source)
+        .order_by(news.c.source)
     )
-    return cursor.fetchall()
+    with database.engine.connect() as conn:
+        rows = [dict(row._mapping) for row in conn.execute(candidates_stmt)]
+        real_rows = [dict(row._mapping) for row in conn.execute(real_stmt)]
 
-
-def clean_mock_news(db_path: Path, apply: bool):
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = find_mock_news(conn)
-        print(f"DB: {db_path.resolve()}")
-        print(f"Mock news candidates: {len(rows)}")
-
-        for row in rows[:20]:
-            print(f"  id={row['id']} ts={row['timestamp']} source={row['source']} headline={row['headline'][:100]}")
-        if len(rows) > 20:
-            print(f"  ... {len(rows) - 20} more")
-
-        print("\nReal sources preserved:")
-        for row in summarize_real_sources(conn):
-            print(dict(row))
-
-        if not apply:
-            print("\nDRY RUN only. Re-run with --apply to delete mock-source rows.")
-            return
-
-        cursor = conn.cursor()
-        placeholders = ",".join("?" for _ in MOCK_SOURCES)
-        cursor.execute(f"DELETE FROM news WHERE source IN ({placeholders})", tuple(sorted(MOCK_SOURCES)))
-        conn.commit()
-        print(f"\nDeleted mock news rows: {cursor.rowcount}")
-    finally:
-        conn.close()
+    print(f"DB: {database.get_database_label()}")
+    print(f"Mock news candidates: {len(rows)}")
+    for row in rows[:20]:
+        print(f"  id={row['id']} ts={row['timestamp']} source={row['source']} headline={row['headline'][:100]}")
+    if len(rows) > 20:
+        print(f"  ... {len(rows) - 20} more")
+    print("\nReal sources preserved:")
+    for row in real_rows:
+        print(row)
+    if not apply:
+        print("\nDRY RUN only. Re-run with --apply to delete mock-source rows.")
+        return
+    with database.engine.begin() as conn:
+        result = conn.execute(delete(news).where(news.c.source.in_(sorted(MOCK_SOURCES))))
+    print(f"\nDeleted mock news rows: {result.rowcount}")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Remove clearly mocked news rows while preserving real RSS sources.")
-    parser.add_argument("--db", default=str(DB_PATH), help="SQLite DB path. Default: backend/trading_v2.db")
+    parser = argparse.ArgumentParser(description="Remove mocked PostgreSQL news rows while preserving real RSS sources.")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--dry-run", action="store_true", help="List rows that would be removed.")
-    group.add_argument("--apply", action="store_true", help="Delete mock-source rows.")
+    group.add_argument("--dry-run", action="store_true")
+    group.add_argument("--apply", action="store_true")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    clean_mock_news(Path(args.db), apply=args.apply)
+    clean_mock_news(apply=args.apply)

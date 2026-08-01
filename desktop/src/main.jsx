@@ -8,6 +8,7 @@ import {
 import "./styles.css";
 
 const previewState = {
+  database: { backend: "PostgreSQL", label: "postgresql://localhost/tgr01" },
   workers: {
     price_worker: { status: "healthy", age_seconds: 2 },
     news_worker: { status: "healthy", age_seconds: 3 }
@@ -20,6 +21,7 @@ const previewState = {
   clock: { status: "OK", skew_seconds: 0.42, max_skew_seconds: 300 },
   portfolio: { equity_brl: 9840.63, exposure_pct: 18.63 },
   rag: { documents: 67, chunks: 122, retrievals: 1 },
+  external_rag: { status: "ready", reachable: true, dense_indexed: 833, lexical_indexed: 833, reranker_device: "cuda" },
   reports: [{ name: "last_entry_decisions.json", size_bytes: 5178 }],
   logs: [
     {
@@ -196,7 +198,7 @@ function App() {
       </nav>
       <div className="side-meta">
         <div><Database size={14} /><span>Environment<strong>PAPER MODE</strong></span></div>
-        <div><Database size={14} /><span>Database<strong>SQLite <b>Connected</b></strong></span></div>
+        <div><Database size={14} /><span>Database<strong>{state.database?.backend || "PostgreSQL"} <b>Connected</b></strong></span></div>
         <div><TerminalSquare size={14} /><span>Version<strong>2.0.0</strong></span></div>
         <div><Clock3 size={14} /><span>Local Time<strong>{new Date().toLocaleString("pt-BR")}</strong></span></div>
       </div>
@@ -205,8 +207,9 @@ function App() {
     <main className="main-area">
       <header className="infra-bar">
         <TopStatus icon={Gauge} label="Mode" value="PAPER" />
-        <TopStatus icon={Database} label="Database" value="SQLite" detail="Connected" />
+        <TopStatus icon={Database} label="Database" value={state.database?.backend || "PostgreSQL"} detail="Connected" />
         <TopStatus icon={UsersRound} label="Workers" value={`${healthyWorkers} / 2 Healthy`} />
+        <TopStatus icon={Brain} label="External RAG" value={(state.external_rag?.status || "unknown").toUpperCase()} detail={`D ${state.external_rag?.dense_indexed ?? 0} / L ${state.external_rag?.lexical_indexed ?? 0}`} tone={state.external_rag?.status === "ready" ? "good" : "bad"} />
         <TopStatus icon={Clock3} label="Clock" value={state.clock?.status === "OK" ? "Verified" : "Review"} detail={`Skew: ${state.clock?.skew_seconds ?? "--"}s`} tone={state.clock?.status === "OK" ? "good" : "bad"} />
         <button className="icon-button" title="Refresh state" aria-label="Refresh state" onClick={refresh}><RefreshCw size={16} /></button>
       </header>
@@ -296,6 +299,7 @@ function App() {
           <button onClick={() => run("readiness")} disabled={running}><CheckCircle2 size={13} />Readiness</button>
           <button onClick={() => run("ragDocs")} disabled={running}><Brain size={13} />RAG Docs</button>
           <button onClick={() => run("ragNews")} disabled={running}><Brain size={13} />RAG News</button>
+          <button onClick={() => run("externalRag")} disabled={running}><Brain size={13} />External RAG</button>
           <button onClick={() => run("analyzeEntries")} disabled={running}><FileSearch size={13} />Entries</button>
         </div>
       </section>

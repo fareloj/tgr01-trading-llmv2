@@ -6,3 +6,5 @@ requests>=2.31.0
 pytest>=8.0.0
 textual>=6.0.0,<7.0.0
 defusedxml>=0.7.1
+SQLAlchemy>=2.0.0
+psycopg[binary]>=3.0.0

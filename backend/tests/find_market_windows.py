@@ -1,16 +1,18 @@
 import argparse
 import math
-import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
+from sqlalchemy import select
+
+from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from core.database import get_db_path
+from backend.core import database
+from backend.core.db_models import klines
 
 LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
 
@@ -36,21 +38,18 @@ def format_local(timestamp: int) -> str:
     return datetime.fromtimestamp(timestamp, LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
 
 
-def fetch_candles(db_path: Path, asset: str, timeframe: str, from_ts: int, to_ts: int) -> list[sqlite3.Row]:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        return conn.execute(
-            """
-            SELECT timestamp, open, high, low, close, volume
-            FROM klines
-            WHERE asset = ? AND timeframe = ? AND timestamp BETWEEN ? AND ?
-            ORDER BY timestamp ASC
-            """,
-            (asset, timeframe, from_ts, to_ts),
-        ).fetchall()
-    finally:
-        conn.close()
+def fetch_candles(asset: str, timeframe: str, from_ts: int, to_ts: int) -> list[dict]:
+    stmt = (
+        select(klines.c.timestamp, klines.c.open, klines.c.high, klines.c.low, klines.c.close, klines.c.volume)
+        .where(
+            klines.c.asset == asset,
+            klines.c.timeframe == timeframe,
+            klines.c.timestamp.between(from_ts, to_ts),
+        )
+        .order_by(klines.c.timestamp.asc())
+    )
+    with database.engine.connect() as conn:
+        return [dict(row._mapping) for row in conn.execute(stmt)]
 
 
 def classify_move(move_pct: float, *, trend_threshold_pct: float, sideways_threshold_pct: float) -> str:
@@ -63,7 +62,7 @@ def classify_move(move_pct: float, *, trend_threshold_pct: float, sideways_thres
     return "MIXED"
 
 
-def window_volatility_pct(rows: list[sqlite3.Row]) -> float:
+def window_volatility_pct(rows: list[dict]) -> float:
     prices = [float(row["close"]) for row in rows]
     if len(prices) < 2:
         return 0.0
@@ -79,7 +78,7 @@ def window_volatility_pct(rows: list[sqlite3.Row]) -> float:
 
 
 def find_windows(
-    rows: list[sqlite3.Row],
+    rows: list[dict],
     *,
     window_minutes: int,
     stride_minutes: int,
@@ -154,8 +153,7 @@ def print_windows(title: str, windows: list[MarketWindow]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Find uptrend/downtrend/sideways BTC windows already stored in SQLite.")
-    parser.add_argument("--db", default=str(get_db_path()))
+    parser = argparse.ArgumentParser(description="Find BTC market regimes stored in PostgreSQL.")
     parser.add_argument("--asset", default="BTC/BRL")
     parser.add_argument("--timeframe", default="1m")
     parser.add_argument("--from-local", required=True, help='Start datetime, format "YYYY-MM-DD HH:MM".')
@@ -169,7 +167,6 @@ def main() -> int:
     args = parser.parse_args()
 
     rows = fetch_candles(
-        Path(args.db),
         args.asset,
         args.timeframe,
         parse_local_datetime(args.from_local),
@@ -184,7 +181,7 @@ def main() -> int:
         min_coverage_pct=args.min_coverage_pct,
     )
 
-    print(f"DB: {Path(args.db).resolve()}")
+    print(f"DB: {database.get_database_label()}")
     print(f"Candles na janela: {len(rows)}")
     print(f"Janelas avaliadas: {len(windows)}")
     print_windows("Melhores exemplos por regime", select_examples(windows, args.per_label))

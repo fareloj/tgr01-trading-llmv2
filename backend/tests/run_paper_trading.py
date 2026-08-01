@@ -1,31 +1,51 @@
 import argparse
-import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 PROJECT_DIR = BACKEND_DIR.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(PROJECT_DIR))
 
-from core.database import get_db_path
-from main import run_trading_cycle
+from sqlalchemy.engine import make_url
+
+from backend.core import database
+from backend.main import run_trading_cycle
 
 
-def backup_db():
+def backup_db() -> Path | None:
+    """Create a PostgreSQL custom-format dump through the Compose database service."""
     try:
         backups_dir = BACKEND_DIR / "backups"
         backups_dir.mkdir(exist_ok=True)
-        db_path = get_db_path()
-
         timestamp_str = time.strftime("%Y%m%d_%H%M")
-        dest_path = backups_dir / f"trading_v2_{timestamp_str}.db"
-
-        if db_path.exists():
-            shutil.copy2(db_path, dest_path)
-            print(f"[BACKUP] Banco de dados salvo com seguranca em: {dest_path.name}")
+        dest_path = backups_dir / f"trading_v2_{timestamp_str}.dump"
+        url = make_url(database.DATABASE_URL)
+        command = [
+            "docker", "compose", "exec", "-T", "db", "pg_dump",
+            "--format=custom", "--no-owner", "--no-privileges",
+            "--username", url.username or "tgr01",
+            "--dbname", url.database or "tgr01",
+        ]
+        result = subprocess.run(
+            command,
+            cwd=PROJECT_DIR,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(detail or f"pg_dump retornou {result.returncode}")
+        if not result.stdout:
+            raise RuntimeError("pg_dump retornou um arquivo vazio")
+        dest_path.write_bytes(result.stdout)
+        print(f"[BACKUP] Dump PostgreSQL salvo em: {dest_path.name}")
+        return dest_path
     except Exception as e:
         print(f"[WARNING] Falha ao realizar backup do banco: {type(e).__name__}: {e}")
+        return None
 
 
 def start_paper_trading(cycles: int = 4320, sleep_seconds: int = 60, backup: bool = True):
@@ -33,7 +53,7 @@ def start_paper_trading(cycles: int = 4320, sleep_seconds: int = 60, backup: boo
     print("INICIANDO PAPER TRADING ORCHESTRATOR")
     print(f"Meta: {cycles} ciclos simulados rodando em cima de DADOS REAIS.")
     print(f"Intervalo: {sleep_seconds}s entre ciclos.")
-    print(f"DB path: {get_db_path()}")
+    print(f"Database: {database.get_database_label()}")
     print("=" * 60)
 
     last_backup_time = time.time()
@@ -71,7 +91,7 @@ def start_paper_trading(cycles: int = 4320, sleep_seconds: int = 60, backup: boo
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run paper trading cycles against the real local SQLite DB.")
+    parser = argparse.ArgumentParser(description="Run paper trading cycles against the configured PostgreSQL database.")
     parser.add_argument("--cycles", type=int, default=4320, help="Number of cycles to run. Default: 4320")
     parser.add_argument("--sleep", type=int, default=60, help="Seconds between cycles. Default: 60")
     parser.add_argument("--no-backup", action="store_true", help="Skip the startup/periodic DB backup.")

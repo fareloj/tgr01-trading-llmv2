@@ -1,25 +1,20 @@
 import argparse
 import json
-import sqlite3
+import sys
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BACKEND_DIR / "trading_v2.db"
-REPORTS_DIR = BACKEND_DIR / "reports"
+from sqlalchemy import select
+
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+if str(PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_DIR))
+
+from backend.core import database
+from backend.core.db_models import klines, trade_logs
 
 
 def parse_horizons(value: str) -> list[int]:
     return [int(part.strip()) for part in value.split(",") if part.strip()]
-
-
-def fetch_rows(cursor, query: str, params: tuple = ()):
-    cursor.execute(query, params)
-    return [dict(row) for row in cursor.fetchall()]
-
-
-def has_column(cursor, table: str, column: str) -> bool:
-    cursor.execute(f"PRAGMA table_info({table})")
-    return column in {row["name"] for row in cursor.fetchall()}
 
 
 def evaluation_base_price(row: dict) -> float:
@@ -28,22 +23,19 @@ def evaluation_base_price(row: dict) -> float:
     return float(row.get("execution_price") or 0.0)
 
 
-def fetch_future_price(cursor, timestamp: int, horizon_minutes: int) -> dict | None:
+def fetch_future_price(connection, timestamp: int, horizon_minutes: int) -> dict | None:
     target = timestamp + (horizon_minutes * 60)
-    cursor.execute(
-        """
-        SELECT timestamp, close
-        FROM klines
-        WHERE asset='BTC/BRL'
-          AND timeframe='1m'
-          AND timestamp >= ?
-        ORDER BY timestamp ASC
-        LIMIT 1
-        """,
-        (target,),
-    )
-    row = cursor.fetchone()
-    return dict(row) if row else None
+    row = connection.execute(
+        select(klines.c.timestamp, klines.c.close)
+        .where(
+            klines.c.asset == "BTC/BRL",
+            klines.c.timeframe == "1m",
+            klines.c.timestamp >= target,
+        )
+        .order_by(klines.c.timestamp.asc())
+        .limit(1)
+    ).first()
+    return dict(row._mapping) if row else None
 
 
 def classify(action: str, move_pct: float, threshold_pct: float) -> str:
@@ -53,44 +45,39 @@ def classify(action: str, move_pct: float, threshold_pct: float) -> str:
         if move_pct <= -threshold_pct:
             return "bad"
         return "neutral"
-
     if action == "SELL":
         if move_pct <= -threshold_pct:
             return "good"
         if move_pct >= threshold_pct:
             return "bad"
         return "neutral"
-
     if action == "HOLD":
         if move_pct >= threshold_pct:
             return "missed_upside"
         if move_pct <= -threshold_pct:
             return "avoided_downside"
         return "good"
-
     return "not_applicable"
 
 
-def evaluate(db_path: Path, since_id: int | None, horizons: list[int], threshold_pct: float, limit: int):
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-
-    where = "WHERE id >= ?" if since_id is not None else ""
-    params = (since_id,) if since_id is not None else ()
-    effective_price_select = ", effective_price" if has_column(cursor, "trade_logs", "effective_price") else ""
-    rows = fetch_rows(
-        cursor,
-        f"""
-        SELECT id, timestamp, llm_action, llm_reasoning, action, llm_conviction,
-               system_reliability, final_confidence, executed_size, execution_price, reasoning
-               {effective_price_select}
-        FROM trade_logs
-        {where}
-        ORDER BY id ASC
-        """,
-        params,
+def evaluate(since_id: int | None, horizons: list[int], threshold_pct: float, limit: int):
+    stmt = select(
+        trade_logs.c.id,
+        trade_logs.c.timestamp,
+        trade_logs.c.llm_action,
+        trade_logs.c.llm_reasoning,
+        trade_logs.c.action,
+        trade_logs.c.llm_conviction,
+        trade_logs.c.system_reliability,
+        trade_logs.c.final_confidence,
+        trade_logs.c.executed_size,
+        trade_logs.c.execution_price,
+        trade_logs.c.effective_price,
+        trade_logs.c.reasoning,
     )
+    if since_id is not None:
+        stmt = stmt.where(trade_logs.c.id >= since_id)
+    stmt = stmt.order_by(trade_logs.c.id.asc())
 
     evaluations = []
     summary = {
@@ -106,47 +93,42 @@ def evaluate(db_path: Path, since_id: int | None, horizons: list[int], threshold
         }
         for horizon in horizons
     }
-
-    for row in rows:
-        base_price = evaluation_base_price(row)
-        item = dict(row)
-        item["evaluation_base_price"] = base_price
-        item["horizons"] = {}
-
-        for horizon in horizons:
-            bucket = summary[str(horizon)]
-            future = fetch_future_price(cursor, int(row["timestamp"]), horizon)
-            if future is None or base_price <= 0:
-                bucket["not_matured"] += 1
-                item["horizons"][str(horizon)] = {"status": "not_matured"}
-                continue
-
-            future_price = float(future["close"])
-            move_pct = ((future_price - base_price) / base_price) * 100.0
-            result = classify(row["action"], move_pct, threshold_pct)
-            bucket["matured"] += 1
-            bucket[result] += 1
-            item["horizons"][str(horizon)] = {
-                "status": result,
-                "future_timestamp": int(future["timestamp"]),
-                "future_price": round(future_price, 2),
-                "move_pct": round(move_pct, 4),
-            }
-
-        evaluations.append(item)
-
-    conn.close()
+    with database.engine.connect() as conn:
+        rows = [dict(row._mapping) for row in conn.execute(stmt)]
+        for row in rows:
+            base_price = evaluation_base_price(row)
+            item = dict(row)
+            item["evaluation_base_price"] = base_price
+            item["horizons"] = {}
+            for horizon in horizons:
+                bucket = summary[str(horizon)]
+                future = fetch_future_price(conn, int(row["timestamp"]), horizon)
+                if future is None or base_price <= 0:
+                    bucket["not_matured"] += 1
+                    item["horizons"][str(horizon)] = {"status": "not_matured"}
+                    continue
+                future_price = float(future["close"])
+                move_pct = ((future_price - base_price) / base_price) * 100.0
+                result = classify(row["action"], move_pct, threshold_pct)
+                bucket["matured"] += 1
+                bucket[result] += 1
+                item["horizons"][str(horizon)] = {
+                    "status": result,
+                    "future_timestamp": int(future["timestamp"]),
+                    "future_price": round(future_price, 2),
+                    "move_pct": round(move_pct, 4),
+                }
+            evaluations.append(item)
 
     report = {
-        "db_path": str(db_path.resolve()),
+        "db_path": database.get_database_label(),
         "since_id": since_id,
         "threshold_pct": threshold_pct,
         "horizons_minutes": horizons,
-        "logs_evaluated": len(rows),
+        "logs_evaluated": len(evaluations),
         "summary": summary,
         "evaluations": evaluations,
     }
-
     print_report(report, limit=limit)
     return report
 
@@ -157,36 +139,32 @@ def print_report(report: dict, limit: int):
         print(f"Filtro: trade_logs.id >= {report['since_id']}")
     print(f"Threshold: +/-{report['threshold_pct']}%")
     print(f"Logs avaliados: {report['logs_evaluated']}")
-
     print("\nResumo por horizonte")
     for horizon, data in report["summary"].items():
         print(f"  {horizon}m: {data}")
-
     print("\nExemplos")
     for item in report["evaluations"][-limit:]:
         print(
             f"  id={item['id']} action={item['action']} llm={item['llm_action']} "
-            f"price={item.get('evaluation_base_price', item['execution_price'])} reason={item['reasoning']}"
+            f"price={item['evaluation_base_price']} reason={item['reasoning']}"
         )
         for horizon, result in item["horizons"].items():
             print(f"    {horizon}m -> {result}")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Evaluate decisions against future BTC/BRL price movement.")
-    parser.add_argument("--db", default=str(DB_PATH), help="SQLite DB path.")
-    parser.add_argument("--since-id", type=int, default=None, help="Only evaluate trade_logs with id >= this value.")
-    parser.add_argument("--horizons", default="5,15,30,60", help="Comma-separated horizons in minutes.")
-    parser.add_argument("--threshold", type=float, default=0.20, help="Opportunity threshold in percent. Default: 0.20")
-    parser.add_argument("--limit", type=int, default=10, help="Example rows to print. Default: 10")
-    parser.add_argument("--json-out", default="", help="Optional JSON report output path.")
+    parser = argparse.ArgumentParser(description="Evaluate PostgreSQL decisions against future BTC/BRL movement.")
+    parser.add_argument("--since-id", type=int, default=None)
+    parser.add_argument("--horizons", default="5,15,30,60")
+    parser.add_argument("--threshold", type=float, default=0.20)
+    parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--json-out", default="")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     report = evaluate(
-        db_path=Path(args.db),
         since_id=args.since_id,
         horizons=parse_horizons(args.horizons),
         threshold_pct=args.threshold,

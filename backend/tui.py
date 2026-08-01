@@ -12,9 +12,9 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, RichLog, S
 BACKEND_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BACKEND_DIR.parent
 if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+    sys.path.insert(0, str(PROJECT_DIR))
 
-from ops.commands import command_catalog
+from backend.ops.commands import command_catalog
 
 
 def age(seconds: int | None) -> str:
@@ -78,6 +78,7 @@ class TradingOpsTui(App):
                 yield Button("Revisao LLM", id="llm_review")
                 yield Button("RAG Docs", id="rag_docs")
                 yield Button("RAG News", id="rag_news")
+                yield Button("RAG Externo", id="external_rag")
                 yield Button("Parar", id="stop", variant="error", disabled=True)
             with Horizontal(id="content"):
                 yield RichLog(id="output", highlight=True, markup=True, wrap=True)

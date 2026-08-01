@@ -3,10 +3,10 @@ import sys
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from features.payload_builder import build_agent_payload
-from rag.decision_memory import build_decision_context_block, build_trade_log_context_block
+from backend.features.payload_builder import build_agent_payload
+from backend.rag.decision_memory import build_decision_context_block, build_trade_log_context_block
 
 
 def main() -> int:

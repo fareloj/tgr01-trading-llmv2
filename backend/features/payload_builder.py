@@ -3,9 +3,10 @@ from pathlib import Path
 import sys
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(str(BASE_DIR))
-from core.database import get_connection, get_db_path
-from features.indicators import get_historical_klines, calculate_technical_status
+PROJECT_DIR = BASE_DIR.parent
+sys.path.insert(0, str(PROJECT_DIR))
+from backend.core.database import get_db_path
+from backend.features.indicators import get_historical_klines, calculate_technical_status
 
 MARKET_DATA_STALE_SECONDS = 300
 NEWS_STALE_SECONDS = 6 * 3600
@@ -28,25 +29,13 @@ NEGATIVE_NEWS_TERMS = {
 
 
 def get_latest_news(hours: int = 24, limit: int = 5, as_of_timestamp: int | None = None) -> list:
-    """Busca as notícias das últimas N horas no SQLite (Push cronológico, sem RAG Vectorial)."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    
+    """Busca as notícias das últimas N horas (Push cronológico, sem RAG Vectorial)."""
+    from backend.core import repository
     now = int(as_of_timestamp or time.time())
     time_threshold = now - (hours * 3600)
     max_allowed_timestamp = now + FUTURE_NEWS_TOLERANCE_SECONDS
     
-    cursor.execute('''
-        SELECT timestamp, headline, source
-        FROM news
-        WHERE timestamp >= ? AND timestamp <= ?
-        ORDER BY timestamp DESC
-        LIMIT ?
-    ''', (time_threshold, max_allowed_timestamp, limit))
-    
-    rows = cursor.fetchall()
-    conn.close()
-    
+    rows = repository.get_recent_news(limit, start_timestamp=time_threshold, end_timestamp=max_allowed_timestamp)
     news_list = []
     for row in rows:
         news_list.append({
@@ -134,17 +123,10 @@ def build_agent_payload(asset: str = "BTC/BRL", timeframe: str = "1m", as_of_tim
     news_risk = build_news_risk(recent_news)
     
     # 3. Busca saldos virtuais
-    from core.database import get_connection
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT amount FROM virtual_portfolio WHERE currency='BRL'")
-    brl_row = cursor.fetchone()
-    brl_balance = brl_row['amount'] if brl_row else 10000.0
-    
-    cursor.execute("SELECT amount FROM virtual_portfolio WHERE currency='BTC'")
-    btc_row = cursor.fetchone()
-    btc_balance = btc_row['amount'] if btc_row else 0.0
-    conn.close()
+    from backend.core import repository
+    portfolio = repository.get_virtual_portfolio()
+    brl_balance = portfolio.get("BRL", 10000.0)
+    btc_balance = portfolio.get("BTC", 0.0)
     
     current_price = technical_context.get("current_price", 0.0)
     btc_value_in_brl = btc_balance * current_price

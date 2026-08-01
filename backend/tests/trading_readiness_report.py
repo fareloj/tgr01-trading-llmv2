@@ -1,19 +1,29 @@
 import argparse
-import sqlite3
+import math
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BACKEND_DIR / "trading_v2.db"
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from agents.decision_agent import load_api_keys
-from core.database import get_connection, get_db_path, init_db
-from features.payload_builder import build_agent_payload
-from analyze_trade_logs import classify_reason
+from backend.agents.decision_agent import load_api_keys
+from sqlalchemy import func, select
+
+from backend.core import database
+from backend.core.database import init_db
+from backend.core.db_models import (
+    klines,
+    news,
+    paper_position_state,
+    system_health,
+    trade_logs,
+    virtual_portfolio,
+)
+from backend.features.payload_builder import build_agent_payload
+from backend.tests.analyze_trade_logs import classify_reason
 
 
 def local_dt(timestamp: int | None) -> str:
@@ -28,43 +38,21 @@ def print_section(title: str):
     print("=" * 60)
 
 
-def fetch_one(query: str, params: tuple = ()):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        return cursor.fetchone()
-    finally:
-        conn.close()
-
-
-def fetch_all(query: str, params: tuple = ()):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        return cursor.fetchall()
-    finally:
-        conn.close()
-
-
 def current_data_report(blockers: list[str], warnings: list[str]):
     print_section("Dados Atuais")
     now = int(time.time())
-    print(f"DB: {get_db_path()}")
+    print(f"DB: {database.get_database_label()}")
     print(f"Agora local: {local_dt(now)}")
 
-    latest_kline = fetch_one(
-        """
-        SELECT timestamp, close
-        FROM klines
-        WHERE asset='BTC/BRL' AND timeframe='1m'
-        ORDER BY timestamp DESC
-        LIMIT 1
-        """
-    )
+    with database.engine.connect() as conn:
+        latest_kline = conn.execute(
+            select(klines.c.timestamp, klines.c.close)
+            .where(klines.c.asset == "BTC/BRL", klines.c.timeframe == "1m")
+            .order_by(klines.c.timestamp.desc())
+            .limit(1)
+        ).mappings().first()
     if latest_kline is None:
-        blockers.append("Sem candle BTC/BRL 1m no SQLite.")
+        blockers.append("Sem candle BTC/BRL 1m no PostgreSQL.")
         print("[FAIL] Sem candle BTC/BRL 1m.")
     else:
         age = now - int(latest_kline["timestamp"])
@@ -74,16 +62,14 @@ def current_data_report(blockers: list[str], warnings: list[str]):
         elif age > 120:
             warnings.append(f"Candle fresco, mas acima de 120s: {age}s.")
 
-    latest_news = fetch_one(
-        """
-        SELECT timestamp, source, headline
-        FROM news
-        ORDER BY timestamp DESC
-        LIMIT 1
-        """
-    )
+    with database.engine.connect() as conn:
+        latest_news = conn.execute(
+            select(news.c.timestamp, news.c.source, news.c.headline)
+            .order_by(news.c.timestamp.desc())
+            .limit(1)
+        ).mappings().first()
     if latest_news is None:
-        warnings.append("Sem noticias no SQLite.")
+        warnings.append("Sem noticias no PostgreSQL.")
         print("[WARN] Sem noticias.")
     else:
         age = now - int(latest_news["timestamp"])
@@ -96,7 +82,10 @@ def current_data_report(blockers: list[str], warnings: list[str]):
 def worker_report(blockers: list[str], warnings: list[str]):
     print_section("Workers")
     now = int(time.time())
-    workers = fetch_all("SELECT worker_name, last_heartbeat FROM system_health ORDER BY worker_name")
+    with database.engine.connect() as conn:
+        workers = conn.execute(
+            select(system_health.c.worker_name, system_health.c.last_heartbeat).order_by(system_health.c.worker_name)
+        ).mappings().all()
     worker_map = {row["worker_name"]: int(row["last_heartbeat"]) for row in workers}
     expected = {"price_worker": 300, "news_worker": 3600}
 
@@ -145,6 +134,64 @@ def payload_report(blockers: list[str], warnings: list[str]):
     return payload
 
 
+def capital_state_report(blockers: list[str]):
+    print_section("Consistencia de Capital Paper")
+    with database.engine.connect() as conn:
+        portfolio_rows = conn.execute(
+            select(virtual_portfolio.c.currency, virtual_portfolio.c.amount)
+        ).mappings()
+        amounts = {row["currency"]: float(row["amount"]) for row in portfolio_rows}
+        position = conn.execute(
+            select(
+                paper_position_state.c.quantity,
+                paper_position_state.c.avg_cost_brl,
+                paper_position_state.c.realized_pnl_brl,
+            ).where(paper_position_state.c.asset == "BTC/BRL")
+        ).mappings().first()
+
+    missing = {"BRL", "BTC"} - set(amounts)
+    if missing:
+        message = f"Portfolio incompleto: moedas ausentes: {', '.join(sorted(missing))}."
+        blockers.append(message)
+        print(f"[FAIL] {message}")
+        return
+
+    brl_balance = amounts["BRL"]
+    btc_balance = amounts["BTC"]
+    print(f"BRL={brl_balance:.8f} | BTC={btc_balance:.12f}")
+
+    if not all(math.isfinite(value) and value >= 0 for value in (brl_balance, btc_balance)):
+        message = "Portfolio possui saldo nao finito ou negativo."
+        blockers.append(message)
+        print(f"[FAIL] {message}")
+        return
+
+    if position is None:
+        if btc_balance > 0:
+            message = (
+                "Saldo BTC existente sem paper_position_state; custo medio legado "
+                "precisa de reconciliacao explicita."
+            )
+            blockers.append(message)
+            print(f"[FAIL] {message}")
+        else:
+            print("[OK] Sem posicao BTC aberta; estado sera criado na primeira ordem paper.")
+        return
+
+    quantity = float(position["quantity"])
+    avg_cost = float(position["avg_cost_brl"])
+    realized_pnl = float(position["realized_pnl_brl"])
+    print(f"Position quantity={quantity:.12f} avg_cost={avg_cost:.8f} realized_pnl={realized_pnl:.8f}")
+    if not all(math.isfinite(value) for value in (quantity, avg_cost, realized_pnl)):
+        blockers.append("paper_position_state possui valor nao finito.")
+    elif quantity < 0 or avg_cost < 0:
+        blockers.append("paper_position_state possui quantidade ou custo negativo.")
+    elif not math.isclose(quantity, btc_balance, rel_tol=1e-6, abs_tol=1e-9):
+        blockers.append(
+            f"Posicao BTC ({quantity:.12f}) diverge do portfolio ({btc_balance:.12f})."
+        )
+
+
 def llm_report(warnings: list[str]):
     print_section("LLM")
     keys = load_api_keys()
@@ -155,24 +202,25 @@ def llm_report(warnings: list[str]):
 
 def audit_report(since_id: int | None, warnings: list[str]):
     print_section("Auditoria / Paper Trading")
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        cursor = conn.cursor()
-        where = "WHERE id >= ?" if since_id is not None else ""
-        params = (since_id,) if since_id is not None else ()
-
-        cursor.execute(f"SELECT COUNT(*) AS count FROM trade_logs {where}", params)
-        total = cursor.fetchone()["count"]
+    with database.engine.connect() as conn:
+        scoped = trade_logs.c.id >= since_id if since_id is not None else None
+        count_stmt = select(func.count()).select_from(trade_logs)
+        if scoped is not None:
+            count_stmt = count_stmt.where(scoped)
+        total = int(conn.scalar(count_stmt) or 0)
         print(f"Logs analisados: {total}" + (f" desde id {since_id}" if since_id is not None else ""))
 
-        cursor.execute(f"SELECT action, COUNT(*) AS count FROM trade_logs {where} GROUP BY action ORDER BY count DESC", params)
-        for row in cursor.fetchall():
+        action_stmt = select(trade_logs.c.action, func.count().label("count")).group_by(trade_logs.c.action)
+        if scoped is not None:
+            action_stmt = action_stmt.where(scoped)
+        for row in conn.execute(action_stmt.order_by(func.count().desc())).mappings():
             print(f"Action {row['action']}: {row['count']}")
 
-        cursor.execute(f"SELECT reasoning, llm_reasoning FROM trade_logs {where}", params)
+        reason_stmt = select(trade_logs.c.reasoning, trade_logs.c.llm_reasoning)
+        if scoped is not None:
+            reason_stmt = reason_stmt.where(scoped)
         buckets = {}
-        for row in cursor.fetchall():
+        for row in conn.execute(reason_stmt).mappings():
             bucket = classify_reason(row["reasoning"], row["llm_reasoning"])
             buckets[bucket] = buckets.get(bucket, 0) + 1
         print(f"Buckets: {dict(sorted(buckets.items()))}")
@@ -182,30 +230,34 @@ def audit_report(since_id: int | None, warnings: list[str]):
         if buckets.get("stale_data", 0) > 0:
             warnings.append(f"Stale data auditado no periodo: {buckets['stale_data']}.")
 
-        cursor.execute(
-            """
-            SELECT id, timestamp, llm_action, llm_reasoning, action, llm_conviction, reasoning
-            FROM trade_logs
-            ORDER BY id DESC
-            LIMIT 5
-            """
-        )
         print("Ultimos 5 logs:")
-        for row in cursor.fetchall():
+        latest_stmt = select(
+            trade_logs.c.id,
+            trade_logs.c.timestamp,
+            trade_logs.c.llm_action,
+            trade_logs.c.llm_reasoning,
+            trade_logs.c.action,
+            trade_logs.c.llm_conviction,
+            trade_logs.c.reasoning,
+        ).order_by(trade_logs.c.id.desc()).limit(5)
+        for row in conn.execute(latest_stmt).mappings():
             print(dict(row))
 
-        cursor.execute("SELECT currency, amount FROM virtual_portfolio ORDER BY currency")
-        portfolio_rows = cursor.fetchall()
+        portfolio_rows = conn.execute(
+            select(virtual_portfolio.c.currency, virtual_portfolio.c.amount).order_by(virtual_portfolio.c.currency)
+        ).mappings()
         amounts = {row["currency"]: float(row["amount"]) for row in portfolio_rows}
-        cursor.execute("SELECT close FROM klines WHERE asset='BTC/BRL' AND timeframe='1m' ORDER BY timestamp DESC LIMIT 1")
-        price_row = cursor.fetchone()
+        price_row = conn.execute(
+            select(klines.c.close)
+            .where(klines.c.asset == "BTC/BRL", klines.c.timeframe == "1m")
+            .order_by(klines.c.timestamp.desc())
+            .limit(1)
+        ).mappings().first()
         if price_row:
             latest_price = float(price_row["close"])
             total_equity = amounts.get("BRL", 0.0) + amounts.get("BTC", 0.0) * latest_price
             exposure = (amounts.get("BTC", 0.0) * latest_price / total_equity * 100.0) if total_equity else 0.0
             print(f"Equity: {total_equity:.2f} BRL | exposure={exposure:.2f}% | latest_price={latest_price:.2f}")
-    finally:
-        conn.close()
 
 
 def final_verdict(blockers: list[str], warnings: list[str], strict: bool):
@@ -242,6 +294,7 @@ if __name__ == "__main__":
     current_data_report(blockers, warnings)
     worker_report(blockers, warnings)
     payload_report(blockers, warnings)
+    capital_state_report(blockers)
     llm_report(warnings)
     audit_report(args.since_id, warnings)
     raise SystemExit(final_verdict(blockers, warnings, strict=args.strict))

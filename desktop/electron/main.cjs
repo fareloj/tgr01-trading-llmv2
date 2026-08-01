@@ -25,7 +25,8 @@ const ACTIONS = {
   readiness: "readiness",
   llmReview: "llm_review",
   ragDocs: "rag_docs",
-  ragNews: "rag_news"
+  ragNews: "rag_news",
+  externalRag: "external_rag"
 };
 
 function createWindow() {

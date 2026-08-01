@@ -1,210 +1,154 @@
-import sqlite3
+import os
+import sys
 from pathlib import Path
 
-# Define DB path na raiz do backend.
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+if str(PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_DIR))
+
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, select, func, inspect
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import QueuePool
+from backend.core.db_models import metadata
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = (BASE_DIR / "trading_v2.db").resolve()
 
-REQUIRED_TABLES = {
-    "klines",
-    "news",
-    "paper_position_state",
-    "trade_logs",
-    "virtual_portfolio",
-    "system_health",
-}
+# Load env variables
+load_dotenv(BASE_DIR.parent / ".env")
+load_dotenv(BASE_DIR / ".env")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL nao definida. Configure o PostgreSQL no .env "
+        "(ex: postgresql://user:senha@localhost:5432/tgr01). "
+        "O fallback silencioso para SQLite foi REMOVIDO por seguranca (Clean Slate / Postgres-only)."
+    )
+
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+
+if not DATABASE_URL.startswith("postgresql"):
+    raise RuntimeError(
+        f"Apenas PostgreSQL e suportado no caminho vivo (Clean Slate). URL recebida: {DATABASE_URL!r}"
+    )
+
+# Engine com pool de conexoes real para concorrencia 24/7.
+engine = create_engine(
+    DATABASE_URL,
+    poolclass=QueuePool,
+    pool_size=10,
+    max_overflow=20,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    connect_args={"connect_timeout": 5}
+)
+
+def get_database_label() -> str:
+    """Return the configured PostgreSQL URL without exposing credentials."""
+    return make_url(DATABASE_URL).render_as_string(hide_password=True)
 
 
-def get_db_path() -> Path:
-    """Returns the canonical SQLite database path used by all workers."""
-    return DB_PATH
-
+def get_db_path() -> str:
+    """Compatibility alias for older status payloads; PostgreSQL has no file path."""
+    return get_database_label()
 
 def get_connection():
-    """Returns a connection to the SQLite database."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
+    """Returns a connection context from the SQLAlchemy engine."""
+    return engine.connect()
 
 def init_db():
-    """Creates the necessary tables if they don't exist."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    """Creates the necessary tables and seeds default portfolio values."""
+    metadata.create_all(engine)
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS klines (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            asset TEXT NOT NULL,
-            timeframe TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            open REAL NOT NULL,
-            high REAL NOT NULL,
-            low REAL NOT NULL,
-            close REAL NOT NULL,
-            volume REAL NOT NULL,
-            UNIQUE(asset, timeframe, timestamp)
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS news (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp INTEGER NOT NULL,
-            headline TEXT NOT NULL,
-            headline_hash TEXT UNIQUE NOT NULL,
-            source TEXT NOT NULL,
-            is_processed BOOLEAN DEFAULT 0,
-            processed_at INTEGER DEFAULT NULL
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS trade_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp INTEGER NOT NULL,
-            llm_action TEXT,
-            llm_reasoning TEXT,
-            llm_decision_brief TEXT,
-            action TEXT NOT NULL,
-            llm_conviction REAL,
-            system_reliability REAL,
-            final_confidence REAL,
-            executed_size REAL,
-            execution_price REAL,
-            reasoning TEXT,
-            payload_snapshot_json TEXT,
-            fee_rate REAL,
-            fee_brl REAL,
-            slippage_rate REAL,
-            expected_price REAL,
-            effective_price REAL,
-            gross_notional_brl REAL,
-            net_notional_brl REAL,
-            brl_delta REAL,
-            btc_delta REAL,
-            equity_before_brl REAL,
-            equity_after_brl REAL,
-            realized_pnl_brl REAL,
-            position_avg_cost_brl REAL
-        )
-    ''')
-    _add_column_if_missing(cursor, "trade_logs", "llm_decision_brief", "TEXT")
-    _add_column_if_missing(cursor, "trade_logs", "payload_snapshot_json", "TEXT")
-    _add_column_if_missing(cursor, "trade_logs", "fee_rate", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "fee_brl", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "slippage_rate", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "expected_price", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "effective_price", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "gross_notional_brl", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "net_notional_brl", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "brl_delta", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "btc_delta", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "equity_before_brl", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "equity_after_brl", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "realized_pnl_brl", "REAL")
-    _add_column_if_missing(cursor, "trade_logs", "position_avg_cost_brl", "REAL")
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS virtual_portfolio (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            currency TEXT UNIQUE NOT NULL,
-            amount REAL NOT NULL
-        )
-    ''')
-
-    cursor.execute('INSERT OR IGNORE INTO virtual_portfolio (currency, amount) VALUES ("BRL", 10000.0)')
-    cursor.execute('INSERT OR IGNORE INTO virtual_portfolio (currency, amount) VALUES ("BTC", 0.0)')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS paper_position_state (
-            asset TEXT PRIMARY KEY,
-            quantity REAL NOT NULL DEFAULT 0.0,
-            avg_cost_brl REAL NOT NULL DEFAULT 0.0,
-            realized_pnl_brl REAL NOT NULL DEFAULT 0.0,
-            updated_at INTEGER NOT NULL
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS system_health (
-            worker_name TEXT PRIMARY KEY,
-            last_heartbeat INTEGER NOT NULL
-        )
-    ''')
-
-    # Add indexes for frequently queried columns to prevent full table scans
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_news_timestamp ON news(timestamp)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_logs_action_timestamp ON trade_logs(action, timestamp)')
-
-    conn.commit()
-    conn.close()
-    print(f"[OK] Banco de dados inicializado em {DB_PATH}")
-
-
-def _add_column_if_missing(cursor, table: str, column: str, definition: str):
-    """Apply a small backward-compatible SQLite migration."""
-    cursor.execute(f"PRAGMA table_info({table})")
-    columns = {row["name"] for row in cursor.fetchall()}
-    if column not in columns:
-        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-
+    vp_t = metadata.tables["virtual_portfolio"]
+    with engine.begin() as conn:
+        count = conn.scalar(select(func.count()).select_from(vp_t))
+        if count == 0:
+            conn.execute(vp_t.insert(), [
+                {"currency": "BRL", "amount": 10000.0},
+                {"currency": "BTC", "amount": 0.0}
+            ])
+    print(f"[OK] Banco de dados PostgreSQL inicializado em {get_database_label()}")
 
 def get_db_diagnostics() -> dict:
-    """Collects SQLite health data for preflight/debug output."""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    existing_tables = {row["name"] for row in cursor.fetchall()}
-    missing_tables = sorted(REQUIRED_TABLES - existing_tables)
-
+    """Collects database health data using SQLAlchemy Core."""
     diagnostics = {
-        "db_path": str(DB_PATH),
-        "db_exists": DB_PATH.exists(),
-        "db_size_bytes": DB_PATH.stat().st_size if DB_PATH.exists() else 0,
-        "tables": sorted(existing_tables),
-        "missing_tables": missing_tables,
+        "db_path": get_database_label(),
+        "db_exists": True,
+        "db_size_bytes": 0,
+        "tables": list(metadata.tables.keys()),
+        "missing_tables": [],
         "counts": {},
         "kline_groups": [],
         "system_health": [],
     }
 
-    for table in sorted(REQUIRED_TABLES):
-        if table not in existing_tables:
-            diagnostics["counts"][table] = None
-            continue
-        cursor.execute(f"SELECT COUNT(*) AS count FROM {table}")
-        diagnostics["counts"][table] = cursor.fetchone()["count"]
+    try:
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+        diagnostics["missing_tables"] = sorted(set(metadata.tables) - existing_tables)
+        with engine.connect() as conn:
+            for table_name, table_obj in metadata.tables.items():
+                if table_name not in existing_tables:
+                    diagnostics["counts"][table_name] = None
+                    continue
+                try:
+                    count_val = conn.scalar(select(func.count()).select_from(table_obj))
+                    diagnostics["counts"][table_name] = count_val
+                except Exception:
+                    diagnostics["counts"][table_name] = None
 
-    if "klines" in existing_tables:
-        cursor.execute("""
-            SELECT asset, timeframe, COUNT(*) AS count,
-                   MIN(timestamp) AS min_timestamp,
-                   MAX(timestamp) AS max_timestamp
-            FROM klines
-            GROUP BY asset, timeframe
-            ORDER BY count DESC
-        """)
-        diagnostics["kline_groups"] = [dict(row) for row in cursor.fetchall()]
+            # Klines groups
+            if "klines" in existing_tables:
+                klines_t = metadata.tables["klines"]
+                q = select(
+                    klines_t.c.asset,
+                    klines_t.c.timeframe,
+                    func.count().label("count"),
+                    func.min(klines_t.c.timestamp).label("min_timestamp"),
+                    func.max(klines_t.c.timestamp).label("max_timestamp")
+                ).group_by(klines_t.c.asset, klines_t.c.timeframe).order_by(func.count().desc())
 
-    if "system_health" in existing_tables:
-        cursor.execute("SELECT worker_name, last_heartbeat FROM system_health ORDER BY worker_name")
-        diagnostics["system_health"] = [dict(row) for row in cursor.fetchall()]
+                res = conn.execute(q)
+                diagnostics["kline_groups"] = [
+                    {
+                        "asset": r[0],
+                        "timeframe": r[1],
+                        "count": r[2],
+                        "min_timestamp": r[3],
+                        "max_timestamp": r[4]
+                    }
+                    for r in res
+                ]
 
-    conn.close()
+            # System health
+            if "system_health" in existing_tables:
+                sh_t = metadata.tables["system_health"]
+                q = select(sh_t.c.worker_name, sh_t.c.last_heartbeat).order_by(sh_t.c.worker_name)
+
+                res = conn.execute(q)
+                diagnostics["system_health"] = [
+                    {
+                        "worker_name": r[0],
+                        "last_heartbeat": r[1]
+                    }
+                    for r in res
+                ]
+    except Exception as e:
+        diagnostics["error"] = str(e)
+
     return diagnostics
 
-
 def print_db_diagnostics():
-    """Prints a compact database preflight report."""
+    """Prints a database report using diagnostics."""
     diagnostics = get_db_diagnostics()
-    print(f"[DB] Path: {diagnostics['db_path']}")
-    print(f"[DB] Size: {diagnostics['db_size_bytes']} bytes")
-    if diagnostics["missing_tables"]:
-        print(f"[DB] Missing tables: {', '.join(diagnostics['missing_tables'])}")
+    print(f"[DB] Path: {diagnostics.get('db_path')}")
+    if "error" in diagnostics:
+        print(f"[DB] Connection Error: {diagnostics['error']}")
+        return
     print(f"[DB] Counts: {diagnostics['counts']}")
-    if diagnostics["kline_groups"]:
+    if diagnostics.get("kline_groups"):
         print("[DB] Klines:")
         for group in diagnostics["kline_groups"]:
             print(
@@ -213,9 +157,8 @@ def print_db_diagnostics():
                 f"count={group['count']} "
                 f"range={group['min_timestamp']}..{group['max_timestamp']}"
             )
-    if diagnostics["system_health"]:
+    if diagnostics.get("system_health"):
         print(f"[DB] Worker health: {diagnostics['system_health']}")
-
 
 if __name__ == "__main__":
     init_db()

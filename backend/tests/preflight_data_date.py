@@ -5,10 +5,10 @@ from datetime import datetime
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from core.database import get_connection, get_db_path, init_db, print_db_diagnostics
-from core.clock_sync import check_clock_skew
+from backend.core.database import get_connection, get_db_path, init_db, print_db_diagnostics
+from backend.core.clock_sync import check_clock_skew
 
 
 def local_date(timestamp: int) -> str:
@@ -140,8 +140,8 @@ def run_preflight(
     latest_news = fetch_latest_news()
     if latest_news is None:
         if require_news_today:
-            return fail("Nenhuma noticia encontrada no SQLite.")
-        warn("Nenhuma noticia encontrada no SQLite.")
+            return fail("Nenhuma noticia encontrada no PostgreSQL.")
+        warn("Nenhuma noticia encontrada no PostgreSQL.")
     else:
         news_timestamp = int(latest_news["timestamp"])
         news_date = local_date(news_timestamp)
@@ -177,7 +177,7 @@ def run_preflight(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Check whether SQLite market/news data matches today's local date.")
+    parser = argparse.ArgumentParser(description="Check whether PostgreSQL market/news data matches today's local date.")
     parser.add_argument("--asset", default="BTC/BRL")
     parser.add_argument("--timeframe", default="1m")
     parser.add_argument("--require-news-today", action="store_true")

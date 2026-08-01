@@ -4,7 +4,7 @@ Electron operational dashboard for the Python CLI.
 
 The desktop app does not implement trading logic. It invokes an allowlist of
 existing Python commands through `backend/ops/run_action.py` and reads
-SQLite-derived JSON state.
+PostgreSQL-derived JSON state.
 
 ## Install
 

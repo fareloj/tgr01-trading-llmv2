@@ -1,0 +1,7 @@
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:${RAG_POSTGRES_HOST_PORT:-5433}:5432"
+  orchestrator-python:
+    volumes:
+      - "${TGR01_WORKSPACE_PATH:-D:/Projetos/tgr01-trading-llmv2}:/trading-workspace:ro"

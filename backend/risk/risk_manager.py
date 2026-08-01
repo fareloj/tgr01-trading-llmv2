@@ -1,6 +1,6 @@
 import time
 
-from core.database import get_connection
+# get_connection removed
 
 
 class RiskManager:
@@ -160,6 +160,10 @@ class RiskManager:
                 return self._hold(f"Directional Gate: BUY bloqueado por news red flag ({terms})")
             if rsi_status == "OVERBOUGHT":
                 return self._hold("Directional Gate: BUY bloqueado por RSI OVERBOUGHT")
+            if rsi_status == "OVERSOLD" and macd_status not in {"BULLISH_EXPANDING", "BULLISH_DIVERGENCE"}:
+                return self._hold(
+                    "Directional Gate: BUY bloqueado por RSI OVERSOLD sem confirmacao MACD bullish"
+                )
             if macd_status in {"BEARISH_EXPANDING", "BEARISH_DIVERGENCE"}:
                 return self._hold(f"Directional Gate: BUY bloqueado por MACD {macd_status}")
             if atr_status == "EXTREME":
@@ -178,24 +182,10 @@ class RiskManager:
             return None
 
         cutoff = int(time.time()) - (self.cooldown_minutes * 60)
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT timestamp
-                FROM trade_logs
-                WHERE action = ? AND timestamp >= ?
-                ORDER BY timestamp DESC
-                LIMIT 1
-                """,
-                (action, cutoff),
-            )
-            row = cursor.fetchone()
-        finally:
-            conn.close()
+        from backend.core import repository
+        last_action_ts = repository.get_last_action_timestamp(action, cutoff)
 
-        if row:
+        if last_action_ts is not None:
             return self._hold(f"Cooldown: {action} repetido nos ultimos {self.cooldown_minutes} minutos")
 
         return None

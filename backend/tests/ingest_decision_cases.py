@@ -3,9 +3,9 @@ import sys
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from rag.decision_memory import upsert_recent_trade_log_cases, upsert_trade_log_case
+from backend.rag.decision_memory import upsert_recent_trade_log_cases, upsert_trade_log_case
 
 
 def main() -> int:

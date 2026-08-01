@@ -2,9 +2,9 @@ import sys
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from core import clock_sync
+from backend.core import clock_sync
 
 
 def test_clock_skew_uses_median_sample(monkeypatch):

@@ -10,9 +10,9 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 PROJECT_DIR = BACKEND_DIR.parent
 if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+    sys.path.insert(0, str(PROJECT_DIR))
 
-from ops.commands import CommandSpec, command_catalog
+from backend.ops.commands import CommandSpec, command_catalog
 
 
 RunCommand = Callable[..., subprocess.CompletedProcess]

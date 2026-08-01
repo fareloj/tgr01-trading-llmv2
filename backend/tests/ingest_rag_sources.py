@@ -4,10 +4,10 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 PROJECT_DIR = BACKEND_DIR.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from core.database import get_connection
-from rag.rag_store import init_rag_tables, upsert_document
+from backend.core.database import get_connection
+from backend.rag.rag_store import init_rag_tables, upsert_document
 
 
 DEFAULT_PROJECT_DOCS = [

@@ -1,22 +1,19 @@
 from __future__ import annotations
 
 import argparse
-import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 PROJECT_DIR = BACKEND_DIR.parent
-DB_PATH = BACKEND_DIR / "trading_v2.db"
 REPORTS_DIR = BACKEND_DIR / "reports"
 if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+    sys.path.insert(0, str(PROJECT_DIR))
 
-from ops.commands import command_catalog
-
+from backend.ops.commands import command_catalog
+from backend.core import repository
 
 @dataclass(frozen=True)
 class ExperimentStep:
@@ -26,12 +23,8 @@ class ExperimentStep:
     optional: bool = False
 
 
-def get_next_trade_log_id(db_path: Path = DB_PATH) -> int:
-    conn = sqlite3.connect(db_path)
-    try:
-        return int(conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM trade_logs").fetchone()[0])
-    finally:
-        conn.close()
+def get_next_trade_log_id() -> int:
+    return repository.get_next_trade_log_id()
 
 
 def build_experiment_steps(*, since_id: int, cycles: int, sleep_seconds: int, include_llm_review: bool) -> list[ExperimentStep]:

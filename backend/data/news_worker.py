@@ -10,9 +10,10 @@ from pathlib import Path
 import requests
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(str(BASE_DIR))
+PROJECT_DIR = BASE_DIR.parent
+sys.path.insert(0, str(PROJECT_DIR))
 
-from core.database import get_connection, get_db_path, init_db
+from backend.core.database import init_db
 
 DEFAULT_RSS_FEEDS = {
     "Cointelegraph": "https://cointelegraph.com/rss",
@@ -99,45 +100,29 @@ def fetch_mock_news() -> list[dict]:
 
 
 def persist_news(news_items: list[dict]) -> int:
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        inserted = 0
+    from backend.core import repository
+    inserted = 0
 
-        for item in news_items:
-            source = item["source"]
-            headline = item["headline"]
-            cursor.execute(
-                """
-                INSERT OR IGNORE INTO news (timestamp, headline, headline_hash, source)
-                VALUES (?, ?, ?, ?)
-                """,
-                (int(item["timestamp"]), headline, headline_hash(headline, source), source),
-            )
-            if cursor.rowcount > 0:
-                inserted += 1
-                print(f"[News] Inserida: {source} | {headline[:90]}")
+    for item in news_items:
+        source = item["source"]
+        headline = item["headline"]
+        news_dict = {
+            "timestamp": int(item["timestamp"]),
+            "headline": headline,
+            "headline_hash": headline_hash(headline, source),
+            "source": source
+        }
+        if repository.add_news(news_dict):
+            inserted += 1
+            print(f"[News] Inserida: {source} | {headline[:90]}")
 
-        cursor.execute(
-            """
-            INSERT INTO system_health (worker_name, last_heartbeat)
-            VALUES ('news_worker', ?)
-            ON CONFLICT(worker_name)
-            DO UPDATE SET last_heartbeat=excluded.last_heartbeat
-            """,
-            (int(time.time()),),
-        )
-
-        conn.commit()
-        return inserted
-    finally:
-        conn.close()
+    repository.update_system_health('news_worker', int(time.time()))
+    return inserted
 
 
 def run_news_worker(mode: str = "mock", interval: int = 900, once: bool = False, feed_limit: int = 10):
     print(f"Iniciando News Worker em modo {mode}...")
     init_db()
-    print(f"[News Worker] DB path: {get_db_path()}")
     print(f"[News Worker] interval={interval}s once={once}")
 
     while True:
@@ -163,7 +148,7 @@ def run_news_worker(mode: str = "mock", interval: int = 900, once: bool = False,
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Populate SQLite with mock or real RSS crypto news.")
+    parser = argparse.ArgumentParser(description="Populate PostgreSQL with mock or real RSS crypto news.")
     parser.add_argument("--mode", choices=["mock", "real"], default="mock", help="News source mode. Default: mock")
     parser.add_argument("--interval", type=int, default=900, help="Seconds between cycles. Default: 900")
     parser.add_argument("--once", action="store_true", help="Run one cycle and exit.")

@@ -703,7 +703,12 @@ Preflight aprovado
 
 Isso provou que o sistema nao aceita rodar com dado antigo.
 
-## 25. Fases do Projeto
+## 25. Fases do Projeto (Snapshot Histórico — 2026-05-22)
+
+> [!WARNING]
+> **NUMERAÇÃO HISTÓRICA, NÃO-CANÔNICA.** As "Fases" abaixo são um relato narrativo de como o trabalho de hardening se desenrolou até 2026-05-22. Elas **não** correspondem ao mapa de fases oficial do projeto. Em particular, o que aqui é chamado de "Fase 6 - Comparação de modelos" e "Fase 9 - Execução real" **não** é a "Fase 6" atual.
+>
+> O **mapa de fases canônico** vive em `implementation_plan.md`. Equivalência rápida: o estado descrito neste snapshot corresponde ao fim da **Fase 5 (Frontend e Testes Red Team)** do plano canônico, e a "Execução real controlada" descrita aqui é parte da **Fase 6 (Transição para Live Trading)** canônica — que está em andamento agora. Para qualquer LLM ou humano: ao receber instruções sobre "Fase X", use SEMPRE a numeração de `implementation_plan.md`.
 
 ### Fase 0 - V1 e aprendizado
 

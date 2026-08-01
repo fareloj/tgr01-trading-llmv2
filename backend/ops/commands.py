@@ -25,7 +25,7 @@ def command_catalog(since_id: str = "1") -> dict[str, CommandSpec]:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     return {
         "diagnostics": CommandSpec(
-            "Diagnostico SQLite",
+            "Diagnostico PostgreSQL",
             ("backend/core/database.py",),
             "Schema, contagens e heartbeats persistidos.",
         ),
@@ -138,5 +138,10 @@ def command_catalog(since_id: str = "1") -> dict[str, CommandSpec]:
             "RAG noticias 24h",
             ("backend/tests/ingest_rag_sources.py", "--news-hours", "24", "--news-limit", "50"),
             "Atualiza memoria local com noticias recentes persistidas.",
+        ),
+        "external_rag": CommandSpec(
+            "Consultar RAG externo",
+            ("backend/tests/query_external_rag.py",),
+            "Consulta diagnostica ao RAG hibrido; resultados nao participam da decisao de trading.",
         ),
     }

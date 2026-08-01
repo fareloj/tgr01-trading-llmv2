@@ -4,10 +4,10 @@ import sys
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+    sys.path.insert(0, str(BASE_DIR.parent))
 
-from core.database import get_connection
-from rag.rag_store import RagChunk, build_context_block, search_chunks, upsert_document
+# get_connection removed
+from backend.rag.rag_store import RagChunk, build_context_block, search_chunks, upsert_document
 
 
 DEFAULT_DECISION_SOURCE_TYPES = [
@@ -97,24 +97,12 @@ def build_decision_context_block(payload: dict, *, limit: int = 6) -> str:
 
 
 def load_trade_log_snapshot(log_id: int) -> tuple[dict, dict]:
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        row = cursor.execute(
-            """
-            SELECT id, timestamp, llm_action, llm_reasoning, llm_decision_brief,
-                   action, reasoning, payload_snapshot_json
-            FROM trade_logs
-            WHERE id = ?
-            """,
-            (log_id,),
-        ).fetchone()
-    finally:
-        conn.close()
+    from backend.core import repository
+    row = repository.get_trade_log_by_id(log_id)
 
     if not row:
         raise ValueError(f"trade_log id {log_id} nao encontrado")
-    if not row["payload_snapshot_json"]:
+    if not row.get("payload_snapshot_json"):
         raise ValueError(f"trade_log id {log_id} nao possui payload_snapshot_json")
 
     snapshot = json.loads(row["payload_snapshot_json"])
@@ -199,29 +187,10 @@ def upsert_trade_log_case(log_id: int) -> int:
 
 
 def upsert_recent_trade_log_cases(*, since_id: int | None = None, limit: int = 100) -> list[int]:
-    where = "WHERE payload_snapshot_json IS NOT NULL"
-    params: list[int] = []
-    if since_id is not None:
-        where += " AND id >= ?"
-        params.append(since_id)
-
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        rows = cursor.execute(
-            f"""
-            SELECT id
-            FROM trade_logs
-            {where}
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (*params, limit),
-        ).fetchall()
-    finally:
-        conn.close()
+    from backend.core import repository
+    rows = repository.get_trade_log_ids(since_id=since_id, limit=limit)
 
     touched = []
-    for row in rows:
-        touched.append(upsert_trade_log_case(int(row["id"])))
+    for row_id in rows:
+        touched.append(upsert_trade_log_case(int(row_id)))
     return touched

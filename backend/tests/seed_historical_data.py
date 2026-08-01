@@ -8,9 +8,9 @@ from zoneinfo import ZoneInfo
 import requests
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(str(BACKEND_DIR))
+sys.path.append(str(BACKEND_DIR.parent))
 
-from core.database import get_connection, get_db_path, init_db
+from backend.core.database import get_connection, get_db_path, init_db
 
 
 LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
@@ -75,7 +75,7 @@ def seed_history(
                 count += 1
 
         conn.commit()
-        print(f"Sucesso! {count} novos candles historicos inseridos no SQLite.")
+        print(f"Sucesso! {count} novos candles historicos inseridos no PostgreSQL.")
         print("O robo agora deve ter dados suficientes para operar no proximo ciclo.")
 
     except Exception as e:
@@ -87,7 +87,7 @@ def seed_history(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Seed historical Mercado Bitcoin candles into SQLite.")
+    parser = argparse.ArgumentParser(description="Seed historical Mercado Bitcoin candles into PostgreSQL.")
     parser.add_argument("--symbol", default="BTC-BRL", help="Mercado Bitcoin API symbol. Default: BTC-BRL")
     parser.add_argument("--asset", default="BTC/BRL", help="Internal DB asset name. Default: BTC/BRL")
     parser.add_argument("--timeframe", default="1m", help="Candle timeframe/resolution. Default: 1m")

@@ -5,49 +5,40 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
-sys.path.append(str(BASE_DIR))
+PROJECT_DIR = BASE_DIR.parent
+sys.path.insert(0, str(PROJECT_DIR))
 
-from agents.decision_agent import DecisionAgent, has_llm_api_key
-from core.audit import serialize_payload_snapshot
-from core.database import get_connection, get_db_path, init_db, print_db_diagnostics
-from execution.paper_simulator import empty_execution_audit, execute_paper_order
-from features.payload_builder import build_agent_payload
-from risk.risk_manager import RiskManager
+from backend.agents.decision_agent import DecisionAgent, has_llm_api_key
+from backend.core.audit import serialize_payload_snapshot
+from backend.core.database import get_db_path, init_db, print_db_diagnostics
+from backend.core import database, repository
+from backend.execution.paper_simulator import empty_execution_audit, execute_paper_order
+from backend.features.payload_builder import build_agent_payload
+from backend.risk.risk_manager import RiskManager
 
 load_dotenv()
 
 
 def audit_hold_without_llm(payload: dict, reason: str):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO trade_logs (
-                timestamp, llm_action, llm_reasoning, llm_decision_brief, action, llm_conviction,
-                system_reliability, final_confidence, executed_size, execution_price,
-                reasoning, payload_snapshot_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                int(time.time()),
-                "SKIPPED",
-                reason,
-                f"Acao HOLD: {reason}\nBase operacional: preflight bloqueou consulta ao LLM.\nContexto: dados de mercado inseguros para decisao.",
-                "HOLD",
-                0,
-                0.0,
-                0.0,
-                0.0,
-                payload.get("technical_context", {}).get("current_price", 0.0),
-                reason,
-                serialize_payload_snapshot(payload),
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    data = {
+        "timestamp": int(time.time()),
+        "llm_action": "SKIPPED",
+        "llm_reasoning": reason,
+        "llm_decision_brief": (
+            f"Acao HOLD: {reason}\n"
+            "Base operacional: preflight bloqueou consulta ao LLM.\n"
+            "Contexto: dados de mercado inseguros para decisao."
+        ),
+        "action": "HOLD",
+        "llm_conviction": 0,
+        "system_reliability": 0.0,
+        "final_confidence": 0.0,
+        "executed_size": 0.0,
+        "execution_price": payload.get("technical_context", {}).get("current_price", 0.0),
+        "reasoning": reason,
+        "payload_snapshot_json": serialize_payload_snapshot(payload),
+    }
+    repository.add_trade_log_autocommit(data)
 
 
 def is_llm_technical_failure(llm_decision) -> bool:
@@ -62,7 +53,7 @@ def is_llm_technical_failure(llm_decision) -> bool:
 def run_trading_cycle():
     print("=" * 60)
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Iniciando Ciclo de Trading (V2)...")
-    print("[0/4] Preflight SQLite...")
+    print("[0/4] Preflight Database...")
     init_db()
     print_db_diagnostics()
 
@@ -73,7 +64,7 @@ def run_trading_cycle():
     payload = build_agent_payload()
 
     if payload.get("status") == "ERROR":
-        print(f"[!] Ciclo abortado: {payload.get('message', 'Dados insuficientes no SQLite.')}")
+        print(f"[!] Ciclo abortado: {payload.get('message', 'Dados insuficientes no banco.')}")
         print(f"    DB path: {payload.get('db_path', get_db_path())}")
         print(
             "    Candles: "
@@ -111,7 +102,7 @@ def run_trading_cycle():
         llm_decision = agent.evaluate_market(payload)
     else:
         print("[2/4] (MOCK) GROQ_API_KEY ausente. Simulando IA...")
-        from agents.contracts import DecisionOutput
+        from backend.agents.contracts import DecisionOutput
 
         llm_decision = DecisionOutput(
             action="BUY",
@@ -153,15 +144,15 @@ def run_trading_cycle():
     print(f"      -> MOTIVO: {final_order['reason']}")
 
     print("[4/4] Execucao e Auditoria.")
-    conn = get_connection()
+    sys_rel = rm.calculate_system_reliability(payload)
+
     try:
-        cursor = conn.cursor()
-        sys_rel = rm.calculate_system_reliability(payload)
-        execution_audit = _execute_if_approved(cursor, final_order, current_price, payload)
-        _insert_trade_log(cursor, llm_decision, final_order, sys_rel, current_price, payload, execution_audit)
-        conn.commit()
-    finally:
-        conn.close()
+        with database.engine.begin() as conn:
+            execution_audit = _execute_if_approved(conn, final_order, current_price, payload)
+            _insert_trade_log(conn, llm_decision, final_order, sys_rel, current_price, payload, execution_audit)
+    except Exception as e:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [Error Critico] Transacao falhou e foi desfeita: {type(e).__name__}: {e}")
+        raise
 
     if final_order["action"] == "HOLD":
         print("      -> Nenhuma ordem enviada para a Exchange.")
@@ -171,13 +162,7 @@ def run_trading_cycle():
 
 
 def _workers_are_healthy() -> bool:
-    conn_health = get_connection()
-    try:
-        cursor_health = conn_health.cursor()
-        cursor_health.execute("SELECT * FROM system_health")
-        health_rows = cursor_health.fetchall()
-    finally:
-        conn_health.close()
+    health_rows = repository.get_system_health()
 
     current_time = int(time.time())
     for row in health_rows:
@@ -194,13 +179,13 @@ def _workers_are_healthy() -> bool:
     return True
 
 
-def _execute_if_approved(cursor, final_order: dict, current_price: float, payload: dict) -> dict:
+def _execute_if_approved(connection, final_order: dict, current_price: float, payload: dict) -> dict:
     if final_order["action"] == "HOLD":
         return empty_execution_audit(current_price)
 
     print(f"      -> ENVIANDO ORDEM PAPER TRADING: Executar {final_order['executed_size']:.2f}% do Capital.")
     execution_audit = execute_paper_order(
-        cursor=cursor,
+        connection=connection,
         action=final_order["action"],
         executed_size_pct=final_order["executed_size"],
         current_price=current_price,
@@ -231,47 +216,35 @@ def _execute_if_approved(cursor, final_order: dict, current_price: float, payloa
     return execution_audit
 
 
-def _insert_trade_log(cursor, llm_decision, final_order: dict, sys_rel: float, current_price: float, payload: dict, execution_audit: dict) -> None:
-    cursor.execute(
-        """
-        INSERT INTO trade_logs (
-            timestamp, llm_action, llm_reasoning, llm_decision_brief, action, llm_conviction,
-            system_reliability, final_confidence, executed_size, execution_price,
-            reasoning, payload_snapshot_json, fee_rate, fee_brl, slippage_rate,
-            expected_price, effective_price, gross_notional_brl, net_notional_brl,
-            brl_delta, btc_delta, equity_before_brl, equity_after_brl,
-            realized_pnl_brl, position_avg_cost_brl
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            int(time.time()),
-            llm_decision.action,
-            llm_decision.reasoning,
-            llm_decision.decision_brief,
-            final_order["action"],
-            llm_decision.conviction,
-            sys_rel,
-            (llm_decision.conviction / 100.0) * sys_rel,
-            final_order["executed_size"],
-            current_price,
-            final_order["reason"],
-            serialize_payload_snapshot(payload),
-            execution_audit["fee_rate"],
-            execution_audit["fee_brl"],
-            execution_audit["slippage_rate"],
-            execution_audit["expected_price"],
-            execution_audit["effective_price"],
-            execution_audit["gross_notional_brl"],
-            execution_audit["net_notional_brl"],
-            execution_audit["brl_delta"],
-            execution_audit["btc_delta"],
-            execution_audit["equity_before_brl"],
-            execution_audit["equity_after_brl"],
-            execution_audit["realized_pnl_brl"],
-            execution_audit["position_avg_cost_brl"],
-        ),
-    )
+def _insert_trade_log(connection, llm_decision, final_order: dict, sys_rel: float, current_price: float, payload: dict, execution_audit: dict) -> None:
+    data = {
+        "timestamp": int(time.time()),
+        "llm_action": llm_decision.action,
+        "llm_reasoning": llm_decision.reasoning,
+        "llm_decision_brief": llm_decision.decision_brief,
+        "action": final_order["action"],
+        "llm_conviction": llm_decision.conviction,
+        "system_reliability": sys_rel,
+        "final_confidence": (llm_decision.conviction / 100.0) * sys_rel,
+        "executed_size": final_order["executed_size"],
+        "execution_price": current_price,
+        "reasoning": final_order["reason"],
+        "payload_snapshot_json": serialize_payload_snapshot(payload),
+        "fee_rate": execution_audit["fee_rate"],
+        "fee_brl": execution_audit["fee_brl"],
+        "slippage_rate": execution_audit["slippage_rate"],
+        "expected_price": execution_audit["expected_price"],
+        "effective_price": execution_audit["effective_price"],
+        "gross_notional_brl": execution_audit["gross_notional_brl"],
+        "net_notional_brl": execution_audit["net_notional_brl"],
+        "brl_delta": execution_audit["brl_delta"],
+        "btc_delta": execution_audit["btc_delta"],
+        "equity_before_brl": execution_audit["equity_before_brl"],
+        "equity_after_brl": execution_audit["equity_after_brl"],
+        "realized_pnl_brl": execution_audit["realized_pnl_brl"],
+        "position_avg_cost_brl": execution_audit["position_avg_cost_brl"],
+    }
+    repository.add_trade_log(data, connection=connection)
 
 
 if __name__ == "__main__":

@@ -1,13 +1,10 @@
-import sqlite3
+import sys
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BACKEND_DIR / "trading_v2.db"
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+if str(PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_DIR))
 
-conn = sqlite3.connect(DB_PATH)
-try:
-    cursor = conn.cursor()
-    cursor.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM trade_logs")
-    print(cursor.fetchone()[0])
-finally:
-    conn.close()
+from backend.core import repository
+
+print(repository.get_next_trade_log_id())

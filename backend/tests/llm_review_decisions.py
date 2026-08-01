@@ -10,9 +10,9 @@ from openai import OpenAI, OpenAIError
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPORTS_DIR = BACKEND_DIR / "reports"
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from agents.decision_agent import load_api_keys
+from backend.agents.decision_agent import load_api_keys
 
 load_dotenv(BACKEND_DIR / ".env")
 

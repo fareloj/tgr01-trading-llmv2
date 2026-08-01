@@ -11,12 +11,12 @@ from openai import OpenAI
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPORTS_DIR = BACKEND_DIR / "reports"
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from agents.contracts import DecisionOutput
-from agents.decision_agent import load_api_keys, replace_generic_hold_reason
-from features.payload_builder import build_agent_payload
-from risk.risk_manager import RiskManager
+from backend.agents.contracts import DecisionOutput
+from backend.agents.decision_agent import load_api_keys, replace_generic_hold_reason
+from backend.features.payload_builder import build_agent_payload
+from backend.risk.risk_manager import RiskManager
 
 load_dotenv(BACKEND_DIR / ".env")
 

@@ -3,9 +3,9 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Any
 
-from core.database import get_connection
+from backend.core import repository
 
 
 @dataclass(frozen=True)
@@ -23,58 +23,8 @@ class RagChunk:
 
 
 def init_rag_tables() -> None:
-    """Create optional RAG tables without changing trading behavior."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS rag_documents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_type TEXT NOT NULL,
-                source TEXT NOT NULL,
-                title TEXT NOT NULL,
-                content_hash TEXT UNIQUE NOT NULL,
-                created_at INTEGER NOT NULL,
-                published_at INTEGER,
-                metadata_json TEXT NOT NULL DEFAULT '{}'
-            )
-            """
-        )
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS rag_chunks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                document_id INTEGER NOT NULL,
-                chunk_index INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                token_estimate INTEGER NOT NULL,
-                embedding_model TEXT,
-                embedding_vector_json TEXT,
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                FOREIGN KEY(document_id) REFERENCES rag_documents(id),
-                UNIQUE(document_id, chunk_index)
-            )
-            """
-        )
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS rag_retrieval_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp INTEGER NOT NULL,
-                purpose TEXT NOT NULL,
-                query TEXT NOT NULL,
-                filters_json TEXT NOT NULL DEFAULT '{}',
-                selected_chunk_ids_json TEXT NOT NULL DEFAULT '[]'
-            )
-            """
-        )
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rag_documents_published_at ON rag_documents(published_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rag_documents_source_type ON rag_documents(source_type)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_document_id ON rag_chunks(document_id)")
-        conn.commit()
-    finally:
-        conn.close()
+    """Initialize the schema using repository."""
+    repository.init_db_schema()
 
 
 def content_hash(text: str) -> str:
@@ -82,7 +32,6 @@ def content_hash(text: str) -> str:
 
 
 def estimate_tokens(text: str) -> int:
-    # Conservative enough for budgeting context without adding tokenizer deps.
     return max(1, len(text) // 4)
 
 
@@ -138,36 +87,30 @@ def upsert_document(
     doc_hash = content_hash(f"{source_type}\n{source}\n{title}\n{text}")
     metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
 
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM rag_documents WHERE content_hash = ?", (doc_hash,))
-        existing = cursor.fetchone()
-        if existing:
-            return int(existing["id"])
+    existing = repository.get_document_id_by_hash(doc_hash)
+    if existing:
+        return int(existing)
 
-        cursor.execute(
-            """
-            INSERT INTO rag_documents
-                (source_type, source, title, content_hash, created_at, published_at, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (source_type, source, title, doc_hash, int(time.time()), published_at, metadata_json),
+    document_id = repository.insert_document(
+        source_type=source_type,
+        source=source,
+        title=title,
+        content_hash=doc_hash,
+        created_at=int(time.time()),
+        published_at=published_at,
+        metadata_json=metadata_json
+    )
+
+    for index, chunk in enumerate(chunk_text(text)):
+        repository.insert_chunk(
+            document_id=document_id,
+            chunk_index=index,
+            text=chunk,
+            token_estimate=estimate_tokens(chunk),
+            metadata_json="{}"
         )
-        document_id = int(cursor.lastrowid)
-        for index, chunk in enumerate(chunk_text(text)):
-            cursor.execute(
-                """
-                INSERT INTO rag_chunks
-                    (document_id, chunk_index, text, token_estimate, metadata_json)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (document_id, index, chunk, estimate_tokens(chunk), "{}"),
-            )
-        conn.commit()
-        return document_id
-    finally:
-        conn.close()
+
+    return document_id
 
 
 def tokenize_query(query: str) -> set[str]:
@@ -207,103 +150,60 @@ def search_chunks(
     purpose: str = "manual_review",
     log_retrieval: bool = True,
 ) -> list[RagChunk]:
-    """Deterministic lexical retrieval.
-
-    This is a safe placeholder until embeddings are added. Python controls the
-    query, filters and recency window; the LLM never pulls from the store.
-    """
+    """Deterministic lexical retrieval."""
     init_rag_tables()
     now = int(now or time.time())
     query_tokens = tokenize_query(query)
     source_type_list = list(source_types or [])
 
-    where = []
-    params = []
-    if source_type_list:
-        placeholders = ",".join("?" for _ in source_type_list)
-        where.append(f"d.source_type IN ({placeholders})")
-        params.extend(source_type_list)
-    if max_age_seconds is not None:
-        where.append("(d.published_at IS NULL OR d.published_at >= ?)")
-        params.append(now - max_age_seconds)
+    # Use the central repository joint search function
+    rows = repository.search_chunks(
+        source_types=source_type_list,
+        max_age_seconds=max_age_seconds,
+        now=now
+    )
 
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT
-                c.id AS chunk_id,
-                c.document_id,
-                c.chunk_index,
-                c.text,
-                c.metadata_json AS chunk_metadata_json,
-                d.title,
-                d.source_type,
-                d.source,
-                d.published_at,
-                d.metadata_json AS doc_metadata_json
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.id = c.document_id
-            {where_sql}
-            ORDER BY COALESCE(d.published_at, d.created_at) DESC, c.id DESC
-            LIMIT 250
-            """,
-            params,
+    scored = []
+    for row in rows:
+        score = _score_text(row["text"], query_tokens)
+        if score <= 0:
+            continue
+        meta_dict = {}
+        meta_dict.update(json.loads(row["doc_metadata_json"] or "{}"))
+        meta_dict.update(json.loads(row["chunk_metadata_json"] or "{}"))
+        scored.append(
+            RagChunk(
+                id=int(row["chunk_id"]),
+                document_id=int(row["document_id"]),
+                title=row["title"],
+                source_type=row["source_type"],
+                source=row["source"],
+                published_at=row["published_at"],
+                chunk_index=int(row["chunk_index"]),
+                text=row["text"],
+                score=score,
+                metadata=meta_dict,
+            )
         )
-        scored = []
-        for row in cursor.fetchall():
-            score = _score_text(row["text"], query_tokens)
-            if score <= 0:
-                continue
-            metadata = {}
-            metadata.update(json.loads(row["doc_metadata_json"] or "{}"))
-            metadata.update(json.loads(row["chunk_metadata_json"] or "{}"))
-            scored.append(
-                RagChunk(
-                    id=int(row["chunk_id"]),
-                    document_id=int(row["document_id"]),
-                    title=row["title"],
-                    source_type=row["source_type"],
-                    source=row["source"],
-                    published_at=row["published_at"],
-                    chunk_index=int(row["chunk_index"]),
-                    text=row["text"],
-                    score=score,
-                    metadata=metadata,
-                )
-            )
 
-        scored.sort(key=lambda item: (item.score, item.published_at or 0, item.id), reverse=True)
-        selected = scored[:limit]
+    scored.sort(key=lambda item: (item.score, item.published_at or 0, item.id), reverse=True)
+    selected = scored[:limit]
 
-        if log_retrieval:
-            filters = {
-                "source_types": source_type_list,
-                "limit": limit,
-                "max_age_seconds": max_age_seconds,
-            }
-            cursor.execute(
-                """
-                INSERT INTO rag_retrieval_logs
-                    (timestamp, purpose, query, filters_json, selected_chunk_ids_json)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    now,
-                    purpose,
-                    query,
-                    json.dumps(filters, ensure_ascii=False, sort_keys=True),
-                    json.dumps([item.id for item in selected]),
-                ),
-            )
-            conn.commit()
+    if log_retrieval:
+        filters = {
+            "source_types": source_type_list,
+            "limit": limit,
+            "max_age_seconds": max_age_seconds,
+        }
+        repository.insert_retrieval_log(
+            timestamp=now,
+            purpose=purpose,
+            query=query,
+            filters_json=json.dumps(filters, ensure_ascii=False, sort_keys=True),
+            selected_chunk_ids_json=json.dumps([item.id for item in selected])
+        )
 
-        return selected
-    finally:
-        conn.close()
+    return selected
 
 
 def build_context_block(chunks: list[RagChunk], *, title: str = "RAG CONTEXT") -> str:

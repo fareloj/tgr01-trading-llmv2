@@ -7,12 +7,12 @@ from zoneinfo import ZoneInfo
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPORTS_DIR = BACKEND_DIR / "reports"
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from agents.decision_agent import DecisionAgent, has_llm_api_key
-from core.database import get_connection
-from features.payload_builder import build_agent_payload
-from risk.risk_manager import RiskManager
+from backend.agents.decision_agent import DecisionAgent, has_llm_api_key
+from backend.core.database import get_connection
+from backend.features.payload_builder import build_agent_payload
+from backend.risk.risk_manager import RiskManager
 
 LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
 
@@ -75,6 +75,8 @@ def run_scenario(
     to_ts: int,
     cycles: int,
     step_seconds: int,
+    neutral_fresh_news: bool = False,
+    technical_only: bool = False,
 ) -> dict:
     timestamps = fetch_cycle_timestamps(
         asset=asset,
@@ -113,6 +115,21 @@ def run_scenario(
                 }
             )
             continue
+
+        if neutral_fresh_news:
+            payload["news_context"] = [{"headline": "Neutral historical test context", "timestamp": timestamp}]
+            payload.setdefault("data_health", {})["is_news_stale"] = False
+            payload.setdefault("data_health", {})["news_age_seconds"] = 0
+            payload.setdefault("news_risk", {})["risk_level"] = "NORMAL"
+            payload.setdefault("news_risk", {})["flags"] = []
+
+        if technical_only:
+            payload["test_mode_instructions"] = "IGNORE NOTICIAS TOTALMENTE. AVALIE APENAS INDICADORES TECNICOS E EXPOSICAO (RSI, MACD, ATR)."
+            payload["news_context"] = []
+            payload.setdefault("data_health", {})["is_news_stale"] = False
+            payload.setdefault("data_health", {})["news_age_seconds"] = 0
+            payload.setdefault("news_risk", {})["risk_level"] = "NORMAL"
+            payload.setdefault("news_risk", {})["flags"] = []
 
         decision = agent.evaluate_market(payload)
         exposure = payload.get("portfolio_context", {}).get("current_exposure_percentage", 0.0)
@@ -196,6 +213,8 @@ def main() -> int:
     parser.add_argument("--timeframe", default="1m")
     parser.add_argument("--cycles", type=int, default=10)
     parser.add_argument("--step-seconds", type=int, default=60)
+    parser.add_argument("--neutral-fresh-news", action="store_true", help="Injects synthetic fresh news and resets news_stale to false.")
+    parser.add_argument("--technical-only", action="store_true", help="Explicitly tells the LLM to ignore news and sets news to empty/normal.")
     parser.add_argument("--json-out", default=str(REPORTS_DIR / "last_historical_llm_scenario.json"))
     parser.add_argument("--md-out", default=str(REPORTS_DIR / "last_historical_llm_scenario.md"))
     args = parser.parse_args()
@@ -209,6 +228,8 @@ def main() -> int:
         to_ts=parse_local_datetime(args.to_local),
         cycles=args.cycles,
         step_seconds=args.step_seconds,
+        neutral_fresh_news=args.neutral_fresh_news,
+        technical_only=args.technical_only,
     )
     json_path = Path(args.json_out)
     md_path = Path(args.md_out)

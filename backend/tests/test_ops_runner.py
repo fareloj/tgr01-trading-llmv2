@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -71,3 +73,17 @@ def test_catalog_only_contains_python_script_paths():
     for spec in command_catalog("303").values():
         assert spec.args
         assert spec.args[0].endswith(".py")
+
+
+def test_database_diagnostics_entrypoint_runs_from_project_root():
+    result = subprocess.run(
+        [sys.executable, "backend/core/database.py"],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "PostgreSQL" in result.stdout

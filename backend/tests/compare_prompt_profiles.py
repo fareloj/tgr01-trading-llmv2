@@ -9,11 +9,11 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from agents.contracts import DecisionOutput
-from features.payload_builder import build_news_risk
-from risk.risk_manager import RiskManager
+from backend.agents.contracts import DecisionOutput
+from backend.features.payload_builder import build_news_risk
+from backend.risk.risk_manager import RiskManager
 
 load_dotenv(BACKEND_DIR / ".env")
 
@@ -25,6 +25,26 @@ Retorne BUY ou SELL apenas quando dados tecnicos, noticias e data_health apontar
 Se houver contradicao, noticia confusa, dado stale, RSI neutro sem confirmacao, ou MACD fraco, retorne HOLD.
 Nunca calcule indicadores, sizing, Kelly, stop ou exposicao. Nao ultrapasse 20 palavras no reasoning.
 Preencha decision_brief com no maximo 3 linhas curtas: decisao, base tecnica e contexto.
+Retorne apenas JSON valido conforme schema.
+""",
+    "balanced": """
+Voce e um Decision Agent balanceado para BTC/BRL, usado antes de um Risk Manager deterministico.
+Sua funcao e propor a melhor acao direcional com base no payload; o Risk Manager decide se a ordem sera executada.
+Market data stale e bloqueio forte: se data_health.is_market_data_stale=true, retorne HOLD.
+News stale NAO e bloqueio automatico. Se data_health.is_news_stale=true, trate noticias como contexto fraco, reduza a conviction, e cite "noticias stale" no decision_brief.
+BUY pode ser sugerido quando market_data esta fresco, MACD esta BULLISH_EXPANDING, RSI nao esta OVERBOUGHT, news_risk nao e HIGH, e exposicao permite.
+SELL pode ser sugerido quando market_data esta fresco, MACD esta BEARISH_EXPANDING, RSI nao esta OVERSOLD, e ha exposicao relevante.
+RSI OVERSOLD sozinho nao autoriza BUY. Se MACD estiver BEARISH_EXPANDING ou BEARISH_DIVERGENCE, prefira HOLD.
+RSI OVERBOUGHT sozinho nao autoriza SELL. Se MACD estiver BULLISH_EXPANDING, prefira HOLD.
+Se sinais tecnicos forem neutros, conflitantes, ou dependerem apenas de noticia stale, retorne HOLD.
+Use conviction 80 somente quando sinal tecnico principal, RSI, data_health e news_risk estiverem coerentes.
+Use conviction 60 quando houver sinal tecnico bom mas contexto fraco, incluindo noticias stale.
+Use conviction 50 ou menor para HOLD por conflito, ausencia de confirmacao, ou contexto fraco.
+Nunca calcule indicadores, sizing, Kelly, stop ou exposicao. Nao ultrapasse 20 palavras no reasoning.
+Preencha decision_brief com exatamente 3 linhas curtas:
+Acao: diga BUY, SELL ou HOLD e o motivo principal.
+Base tecnica: cite RSI valor/status, MACD hist/status e preco.
+Contexto: cite market_stale, news_stale, news_risk e exposicao.
 Retorne apenas JSON valido conforme schema.
 """,
     "hybrid": """
@@ -219,7 +239,7 @@ def parse_args():
         "--profiles",
         nargs="+",
         choices=sorted(PROMPT_PROFILES),
-        default=["conservative", "hybrid", "aggressive"],
+        default=["conservative", "balanced", "hybrid", "aggressive"],
     )
     parser.add_argument("--json", action="store_true", help="Print full JSON output.")
     parser.add_argument("--include-payload", action="store_true", help="Include synthetic payloads in JSON output.")

@@ -3,9 +3,9 @@ import sys
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from rag.rag_store import build_context_block, search_chunks
+from backend.rag.rag_store import build_context_block, search_chunks
 
 
 def main() -> int:

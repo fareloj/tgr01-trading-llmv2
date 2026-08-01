@@ -1,24 +1,22 @@
 import os
 import json
-import shutil
-import sqlite3
 import sys
-import tempfile
 import time
 from pathlib import Path
 
+
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
 os.environ["GROQ_API_KEY"] = ""
 
-from core import database
-from agents.contracts import DecisionOutput
-from agents.decision_agent import load_api_keys, parse_retry_seconds, replace_generic_hold_reason
-from features.payload_builder import build_agent_payload, build_news_risk
-from core.audit import build_payload_snapshot
-from main import audit_hold_without_llm, is_llm_technical_failure
-from risk.risk_manager import RiskManager
+from backend.core import database
+from backend.agents.contracts import DecisionOutput
+from backend.agents.decision_agent import load_api_keys, parse_retry_seconds, replace_generic_hold_reason
+from backend.features.payload_builder import build_agent_payload, build_news_risk
+from backend.core.audit import build_payload_snapshot
+from backend.main import audit_hold_without_llm, is_llm_technical_failure
+from backend.risk.risk_manager import RiskManager
 
 
 def _compatible_payload() -> dict:
@@ -37,122 +35,86 @@ def _compatible_payload() -> dict:
 
 
 def _insert_candles(count: int, latest_age_seconds: int = 60):
-    conn = database.get_connection()
-    try:
-        cursor = conn.cursor()
-        timestamp = int(time.time()) - latest_age_seconds - ((count - 1) * 60)
-        price = 100000.0
-        for i in range(count):
-            cursor.execute(
-                """
-                INSERT OR IGNORE INTO klines
-                    (asset, timeframe, timestamp, open, high, low, close, volume)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                ("BTC/BRL", "1m", timestamp, price, price + 100, price - 100, price + 10, 1.0),
-            )
-            timestamp += 60
-            price += 5
-        conn.commit()
-    finally:
-        conn.close()
+    from backend.core import repository
+    timestamp = int(time.time()) - latest_age_seconds - ((count - 1) * 60)
+    price = 100000.0
+    candles = []
+    for i in range(count):
+        candles.append({
+            "asset": "BTC/BRL",
+            "timeframe": "1m",
+            "timestamp": timestamp,
+            "open": price,
+            "high": price + 100,
+            "low": price - 100,
+            "close": price + 10,
+            "volume": 1.0
+        })
+        timestamp += 60
+        price += 5
+    repository.add_klines(candles)
 
 
 def _insert_news(age_seconds: int = 0):
-    conn = database.get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO news (timestamp, headline, headline_hash, source)
-            VALUES (?, ?, ?, ?)
-            """,
-            (int(time.time()) - age_seconds, "Mock headline segura", f"mock_headline_segura_{age_seconds}", "pytest"),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    from backend.core import repository
+    news_dict = {
+        "timestamp": int(time.time()) - age_seconds,
+        "headline": "Mock headline segura",
+        "headline_hash": f"mock_headline_segura_{age_seconds}",
+        "source": "pytest"
+    }
+    repository.add_news(news_dict)
 
 
 def _insert_news_raw(timestamp: int, headline: str, source: str, headline_hash: str):
-    conn = database.get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO news (timestamp, headline, headline_hash, source)
-            VALUES (?, ?, ?, ?)
-            """,
-            (timestamp, headline, headline_hash, source),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    from backend.core import repository
+    news_dict = {
+        "timestamp": timestamp,
+        "headline": headline,
+        "headline_hash": headline_hash,
+        "source": source
+    }
+    repository.add_news(news_dict)
 
 
 def test_payload_blocks_before_30_klines():
-    original_db_path = database.DB_PATH
-    temp_dir = Path(tempfile.mkdtemp(prefix="tgr01_pytest_"))
-    try:
-        database.DB_PATH = (temp_dir / "trading_v2_test.db").resolve()
-        database.init_db()
-        _insert_candles(29)
+    _insert_candles(29)
 
-        payload = build_agent_payload()
+    payload = build_agent_payload()
 
-        assert payload["status"] == "ERROR"
-        assert payload["found_klines"] == 29
-        assert payload["required_klines"] == 30
-        assert payload["asset"] == "BTC/BRL"
-        assert payload["timeframe"] == "1m"
-        assert payload["db_path"] == str(database.get_db_path())
-    finally:
-        database.DB_PATH = original_db_path
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert payload["status"] == "ERROR"
+    assert payload["found_klines"] == 29
+    assert payload["required_klines"] == 30
+    assert payload["asset"] == "BTC/BRL"
+    assert payload["timeframe"] == "1m"
 
 
 def test_payload_allows_30_klines_and_keeps_schema():
-    original_db_path = database.DB_PATH
-    temp_dir = Path(tempfile.mkdtemp(prefix="tgr01_pytest_"))
-    try:
-        database.DB_PATH = (temp_dir / "trading_v2_test.db").resolve()
-        database.init_db()
-        _insert_candles(30)
-        _insert_news()
+    _insert_candles(30)
+    _insert_news()
 
-        payload = build_agent_payload()
+    payload = build_agent_payload()
 
-        assert payload["technical_context"]["status"] == "OK"
-        assert "current_price" in payload["technical_context"]
-        assert len(payload["news_context"]) == 1
-        assert payload["news_risk"]["has_negative_red_flag"] is False
-        assert payload["data_health"]["is_market_data_stale"] is False
-        assert payload["data_health"]["is_news_stale"] is False
-        assert "current_exposure_percentage" in payload["portfolio_context"]
-    finally:
-        database.DB_PATH = original_db_path
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert payload["technical_context"]["status"] == "OK"
+    assert "current_price" in payload["technical_context"]
+    assert len(payload["news_context"]) == 1
+    assert payload["news_risk"]["has_negative_red_flag"] is False
+    assert payload["data_health"]["is_market_data_stale"] is False
+    assert payload["data_health"]["is_news_stale"] is False
+    assert "current_exposure_percentage" in payload["portfolio_context"]
 
 
 def test_payload_ignores_news_too_far_in_future():
-    original_db_path = database.DB_PATH
-    temp_dir = Path(tempfile.mkdtemp(prefix="tgr01_pytest_"))
-    try:
-        database.DB_PATH = (temp_dir / "trading_v2_test.db").resolve()
-        database.init_db()
-        _insert_candles(30)
-        now = int(time.time())
-        _insert_news_raw(now, "Noticia realista atual", "pytest", "current_news")
-        _insert_news_raw(now + 3600, "Noticia venenosa do futuro", "pytest", "future_news")
+    _insert_candles(30)
+    now = int(time.time())
+    _insert_news_raw(now, "Noticia realista atual", "pytest", "current_news")
+    _insert_news_raw(now + 3600, "Noticia venenosa do futuro", "pytest", "future_news")
 
-        payload = build_agent_payload()
+    payload = build_agent_payload()
 
-        headlines = [item["headline"] for item in payload["news_context"]]
-        assert "Noticia realista atual" in headlines
-        assert "Noticia venenosa do futuro" not in headlines
-    finally:
-        database.DB_PATH = original_db_path
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    headlines = [item["headline"] for item in payload["news_context"]]
+    assert "Noticia realista atual" in headlines
+    assert "Noticia venenosa do futuro" not in headlines
 
 
 def test_risk_manager_blocks_low_reliability_buy():
@@ -210,24 +172,16 @@ def test_risk_manager_blocks_buy_with_stale_news():
 
 
 def test_payload_marks_stale_news_and_market_data():
-    original_db_path = database.DB_PATH
-    temp_dir = Path(tempfile.mkdtemp(prefix="tgr01_pytest_"))
-    try:
-        database.DB_PATH = (temp_dir / "trading_v2_test.db").resolve()
-        database.init_db()
-        _insert_candles(30, latest_age_seconds=900)
-        _insert_news(age_seconds=30000)
+    _insert_candles(30, latest_age_seconds=900)
+    _insert_news(age_seconds=30000)
 
-        payload = build_agent_payload()
+    payload = build_agent_payload()
 
-        assert payload["technical_context"]["status"] == "OK"
-        assert payload["data_health"]["is_market_data_stale"] is True
-        assert payload["data_health"]["is_news_stale"] is True
-        assert payload["data_health"]["kline_age_seconds"] >= 900
-        assert payload["data_health"]["news_age_seconds"] >= 30000
-    finally:
-        database.DB_PATH = original_db_path
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert payload["technical_context"]["status"] == "OK"
+    assert payload["data_health"]["is_market_data_stale"] is True
+    assert payload["data_health"]["is_news_stale"] is True
+    assert payload["data_health"]["kline_age_seconds"] >= 900
+    assert payload["data_health"]["news_age_seconds"] >= 30000
 
 
 def test_directional_gate_blocks_buy_with_rsi_overbought():
@@ -307,37 +261,27 @@ def test_buy_with_compatible_context_can_pass_to_next_rules():
 
 
 def test_cooldown_blocks_repeated_buy():
-    original_db_path = database.DB_PATH
-    temp_dir = Path(tempfile.mkdtemp(prefix="tgr01_pytest_"))
-    try:
-        database.DB_PATH = (temp_dir / "trading_v2_test.db").resolve()
-        database.init_db()
-        conn = database.get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO trade_logs
-                    (timestamp, llm_action, llm_reasoning, action, llm_conviction,
-                     system_reliability, final_confidence, executed_size, execution_price, reasoning)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (int(time.time()), "BUY", "prior buy", "BUY", 90, 1.0, 0.9, 5.0, 40000, "prior approved buy"),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+    from backend.core import repository
+    repository.add_trade_log_autocommit({
+        "timestamp": int(time.time()),
+        "llm_action": "BUY",
+        "llm_reasoning": "prior buy",
+        "action": "BUY",
+        "llm_conviction": 90.0,
+        "system_reliability": 1.0,
+        "final_confidence": 0.9,
+        "executed_size": 5.0,
+        "execution_price": 40000.0,
+        "reasoning": "prior approved buy"
+    })
 
-        payload = _compatible_payload()
-        rm = RiskManager(max_exposure=80.0, cooldown_minutes=15)
+    payload = _compatible_payload()
+    rm = RiskManager(max_exposure=80.0, cooldown_minutes=15)
 
-        final_order = rm.evaluate_order("BUY", 90, payload, current_exposure=30.0)
+    final_order = rm.evaluate_order("BUY", 90, payload, current_exposure=30.0)
 
-        assert final_order["action"] == "HOLD"
-        assert final_order["reason"] == "Cooldown: BUY repetido nos ultimos 15 minutos"
-    finally:
-        database.DB_PATH = original_db_path
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert final_order["action"] == "HOLD"
+    assert final_order["reason"] == "Cooldown: BUY repetido nos ultimos 15 minutos"
 
 
 def test_news_risk_detects_negative_red_flag():
@@ -463,57 +407,43 @@ def test_payload_snapshot_keeps_auditable_fields():
 
 
 def test_init_db_migrates_existing_trade_logs_snapshot_column():
-    original_db_path = database.DB_PATH
-    temp_dir = Path(tempfile.mkdtemp(prefix="tgr01_pytest_"))
-    try:
-        database.DB_PATH = (temp_dir / "trading_v2_test.db").resolve()
-        conn = sqlite3.connect(database.DB_PATH)
-        try:
-            conn.execute(
-                """
-                CREATE TABLE trade_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp INTEGER NOT NULL,
-                    action TEXT NOT NULL
-                )
-                """
-            )
-            conn.commit()
-        finally:
-            conn.close()
+    from sqlalchemy import inspect
+    database.init_db()
+    inspector = inspect(database.engine)
+    columns = [col["name"] for col in inspector.get_columns("trade_logs")]
 
-        database.init_db()
-        conn = database.get_connection()
-        try:
-            columns = {row["name"] for row in conn.execute("PRAGMA table_info(trade_logs)").fetchall()}
-        finally:
-            conn.close()
-
-        assert "payload_snapshot_json" in columns
-        assert "llm_decision_brief" in columns
-    finally:
-        database.DB_PATH = original_db_path
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert "payload_snapshot_json" in columns
+    assert "llm_decision_brief" in columns
 
 
 def test_pre_llm_hold_audit_stores_payload_snapshot():
-    original_db_path = database.DB_PATH
-    temp_dir = Path(tempfile.mkdtemp(prefix="tgr01_pytest_"))
-    try:
-        database.DB_PATH = (temp_dir / "trading_v2_test.db").resolve()
-        database.init_db()
+    from backend.core import repository
+    audit_hold_without_llm(_compatible_payload(), "Pre-LLM abort: market data stale.")
 
-        audit_hold_without_llm(_compatible_payload(), "Pre-LLM abort: market data stale.")
+    rows = repository.get_trade_logs()
+    assert len(rows) == 1
+    snapshot = json.loads(rows[0]["payload_snapshot_json"])
+    assert snapshot["technical"]["current_price"] == 40000
+    assert snapshot["data_health"]["is_market_data_stale"] is False
 
-        conn = database.get_connection()
-        try:
-            row = conn.execute("SELECT payload_snapshot_json FROM trade_logs LIMIT 1").fetchone()
-        finally:
-            conn.close()
 
-        snapshot = json.loads(row["payload_snapshot_json"])
-        assert snapshot["technical"]["current_price"] == 40000
-        assert snapshot["data_health"]["is_market_data_stale"] is False
-    finally:
-        database.DB_PATH = original_db_path
-        shutil.rmtree(temp_dir, ignore_errors=True)
+def test_build_specific_decision_brief_with_new_indicators():
+    from backend.agents.decision_agent import build_specific_decision_brief
+    payload = {
+        "technical_context": {
+            "current_price": 50000,
+            "rsi": {"value": 45.2, "status": "NEUTRAL"},
+            "macd": {"histogram": -0.5, "status": "BEARISH_EXPANDING"},
+            "bollinger_bands": {"status": "INSIDE"},
+            "ema_crossover": {"status": "BEARISH"},
+            "volume_profile": {"is_volume_spike": False},
+        },
+        "data_health": {"is_market_data_stale": False, "is_news_stale": False},
+        "news_risk": {"risk_level": "LOW"},
+        "portfolio_context": {"current_exposure_percentage": 15.5},
+    }
+
+    brief = build_specific_decision_brief(payload, "BUY", "Momentum check")
+
+    expected_line_2 = "Base tecnica: preco=50000, RSI=45.2 NEUTRAL, MACD=-0.5 BEARISH_EXPANDING, Bollinger=INSIDE, EMA=BEARISH, VolSpike=False."
+    assert expected_line_2 in brief

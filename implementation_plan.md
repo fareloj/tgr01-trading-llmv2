@@ -48,6 +48,11 @@ A barreira de contenção que decide as ordens reais.
 
 ## Cronograma (Fases de Implementação)
 
+> [!IMPORTANT]
+> **FONTE DE VERDADE DO MAPA DE FASES.** Este cronograma é o mapa de fases **canônico** do projeto. Qualquer outro arquivo (incluindo `project_super_summary.md`, que usa uma numeração histórica/narrativa diferente datada de 2026-05-22) está subordinado a este. Se houver conflito sobre "o que é a Fase X", vale este documento.
+>
+> **Status atual (atualizado em 2026-08-01):** Fases 1 a 5 concluídas. A fundação de persistência da Fase 6 foi concluída e validada em PostgreSQL real, com banco de testes isolado, testes de concorrência, backups e migração legada. O projeto permanece exclusivamente em paper trading; execução real não está implementada.
+
 * **Fase 1: Infraestrutura e Dados (Sem LLM)**
   * Configurar Banco SQLite local e ChromaDB para os Embeddings de notícias.
   * Implementar `price_worker.py` (Mock ou Exchange Real - apenas leitura).
@@ -62,6 +67,13 @@ A barreira de contenção que decide as ordens reais.
   * Unir tudo no `main.py` com FastAPI. O CIO ouve os outros agentes e joga pro Risk Manager.
 * **Fase 5: Frontend e Testes Red Team**
   * Dashboard de auditoria e status de logs (Caixa de Vidro).
+* **Fase 6: Fundação Operacional e Pesquisa Segura**
+  * **Concorrência (PostgreSQL) — concluída**: caminho ativo PostgreSQL-only, SQLAlchemy Core, pool real, banco pytest isolado e migração SQLite somente leitura.
+  * **Execução Paper Auditável — concluída**: taxas, slippage, custo médio, PnL e invariantes de capital persistidos transacionalmente.
+  * **Execução Real — fora do escopo atual**: nenhum endpoint privado ou envio de ordem foi implementado. Qualquer proposta futura exige nova arquitetura, revisão independente e autorização explícita.
+  * **Controle de Custos (Token Economics)**: Implementar travas de bloqueio matemático para evitar chamar o LLM Groq em cenários mortos, poupando custo de API no longo prazo.
+  * **Infra Docker — parcial**: PostgreSQL do trading em Compose; RAG híbrido externo isolado em outra stack Docker e integrado apenas para diagnóstico.
+  * **TUI/Electron — concluída para operação local**: ambas usam a mesma allowlist de comandos e não duplicam regras de trading.
 
 ## Verification Plan
 

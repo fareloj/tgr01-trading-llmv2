@@ -1,3 +1,4 @@
+import math
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -21,6 +22,18 @@ class DecisionOutput(BaseModel):
             "e quais dados do payload sustentam a decisao."
         ),
     )
+
+    @field_validator("conviction", mode="before")
+    @classmethod
+    def normalize_fractional_conviction(cls, value):
+        """Normalize JSON floats conservatively without increasing risk."""
+        if isinstance(value, bool):
+            raise ValueError("conviction must be numeric, not boolean")
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError("conviction must be finite")
+            return math.floor(value)
+        return value
 
     @field_validator("decision_brief")
     @classmethod
