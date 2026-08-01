@@ -309,6 +309,12 @@ The research basis and exact safety boundaries are documented in
 
 ## Causal ML Dataset And Baselines
 
+The TCN branch of this research is now frozen and excluded from the active
+trading pipeline. Its code and reproducibility evidence remain available, but
+no neural output enters the Decision Agent, Risk Manager, paper simulator, TUI,
+or Electron application. Reopening criteria are documented in
+[`backend/ml/ARCHIVED.md`](backend/ml/ARCHIVED.md).
+
 The repository can now build an offline machine-learning dataset without
 letting feature rows see future candles. It computes causal price, trend,
 volatility, volume, channel, and drawdown features, then creates exact 15/60

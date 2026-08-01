@@ -1,5 +1,8 @@
 # TCN Neural Research Report
 
+> **Archived:** this experiment is frozen and excluded from every active
+> trading path. See `backend/ml/ARCHIVED.md` for the reopening criteria.
+
 ## Purpose
 
 The neural model is an offline evidence generator for the trading pipeline. It
