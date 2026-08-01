@@ -9,7 +9,7 @@ from backend.ml.sequences import RobustFeatureScaler, RobustTargetScaler
 from backend.ml.tcn import QuantileTCN, TCNConfig
 
 
-CHECKPOINT_FORMAT_VERSION = 1
+CHECKPOINT_FORMAT_VERSION = 2
 
 
 def save_tcn_checkpoint(

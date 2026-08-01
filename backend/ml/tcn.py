@@ -100,11 +100,28 @@ class QuantileTCN(nn.Module):
             nn.GELU(),
             nn.Linear(config.channels, len(config.horizons_minutes) * len(QUANTILES)),
         )
+        self.direction_head = nn.Sequential(
+            nn.Linear(config.channels, config.channels),
+            nn.GELU(),
+            nn.Linear(config.channels, len(config.horizons_minutes) * 3),
+        )
+
+    def encode(self, value: torch.Tensor) -> torch.Tensor:
+        encoded = self.blocks(self.input_projection(value))
+        return encoded[..., -1]
+
+    def forward_heads(self, value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        encoded = self.encode(value)
+        raw = self.head(encoded)
+        directions = self.direction_head(encoded)
+        return (
+            raw.view(len(value), len(self.config.horizons_minutes), len(QUANTILES)),
+            directions.view(len(value), len(self.config.horizons_minutes), 3),
+        )
 
     def forward(self, value: torch.Tensor) -> torch.Tensor:
-        encoded = self.blocks(self.input_projection(value))
-        raw = self.head(encoded[..., -1])
-        return raw.view(len(value), len(self.config.horizons_minutes), len(QUANTILES))
+        raw, _ = self.forward_heads(value)
+        return raw
 
 
 def quantile_loss(

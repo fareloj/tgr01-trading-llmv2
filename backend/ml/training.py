@@ -9,6 +9,7 @@ from typing import Iterable
 
 import numpy as np
 import torch
+import torch.nn.functional as functional
 from torch.utils.data import DataLoader
 
 from backend.ml.sequences import RobustTargetScaler
@@ -22,12 +23,59 @@ class StageConfig:
     weight_decay: float = 1e-4
     patience: int = 2
     gradient_clip: float = 1.0
+    direction_loss_weight: float = 0.25
+    actionable_move_pct: float = 0.20
 
     def __post_init__(self) -> None:
         if self.epochs <= 0 or self.learning_rate <= 0 or self.patience <= 0:
             raise ValueError("training stage settings must be positive")
         if self.weight_decay < 0 or self.gradient_clip <= 0:
             raise ValueError("regularization settings are invalid")
+        if self.direction_loss_weight < 0 or self.actionable_move_pct <= 0:
+            raise ValueError("multi-task loss settings are invalid")
+
+
+def direction_classes(targets: torch.Tensor, actionable_move_pct: float) -> torch.Tensor:
+    classes = torch.ones_like(targets, dtype=torch.long)
+    classes[targets <= -actionable_move_pct] = 0
+    classes[targets >= actionable_move_pct] = 2
+    return classes
+
+
+def fit_direction_class_weights(
+    targets: np.ndarray,
+    *,
+    actionable_move_pct: float,
+) -> torch.Tensor:
+    if targets.ndim != 2 or len(targets) == 0 or actionable_move_pct <= 0:
+        raise ValueError("direction class weight inputs are invalid")
+    tensor = torch.from_numpy(targets.astype(np.float32, copy=False))
+    classes = direction_classes(tensor, actionable_move_pct)
+    weights = []
+    for horizon in range(targets.shape[1]):
+        counts = torch.bincount(classes[:, horizon], minlength=3).float()
+        if torch.any(counts == 0):
+            raise ValueError("each direction class must occur in training data")
+        inverse_sqrt = counts.rsqrt()
+        weights.append(inverse_sqrt / inverse_sqrt.mean())
+    return torch.stack(weights)
+
+
+def direction_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    actionable_move_pct: float,
+    class_weights: torch.Tensor,
+) -> torch.Tensor:
+    if logits.shape != (*targets.shape, 3) or class_weights.shape != (targets.shape[1], 3):
+        raise ValueError("direction logits, targets, or class weights have incompatible shapes")
+    classes = direction_classes(targets, actionable_move_pct)
+    losses = [
+        functional.cross_entropy(logits[:, index], classes[:, index], weight=class_weights[index])
+        for index in range(targets.shape[1])
+    ]
+    return torch.stack(losses).mean()
 
 
 def set_reproducible_seed(seed: int) -> None:
@@ -49,6 +97,8 @@ def _run_epoch(
     optimizer: torch.optim.Optimizer | None,
     scaler: torch.amp.GradScaler | None,
     target_scaler: RobustTargetScaler,
+    direction_class_weights: torch.Tensor,
+    config: StageConfig,
     gradient_clip: float,
 ) -> float:
     training = optimizer is not None
@@ -65,7 +115,15 @@ def _run_epoch(
             dtype=torch.float16,
             enabled=device.type == "cuda",
         ):
-            loss = quantile_loss(model(features), target_scaler.transform_tensor(targets))
+            quantiles, direction_logits = model.forward_heads(features)
+            regression_loss = quantile_loss(quantiles, target_scaler.transform_tensor(targets))
+            classification_loss = direction_loss(
+                direction_logits,
+                targets,
+                actionable_move_pct=config.actionable_move_pct,
+                class_weights=direction_class_weights,
+            )
+            loss = regression_loss + config.direction_loss_weight * classification_loss
         if training:
             assert optimizer is not None
             if scaler is not None:
@@ -94,6 +152,7 @@ def fit_stage(
     device: torch.device,
     config: StageConfig,
     target_scaler: RobustTargetScaler,
+    direction_class_weights: torch.Tensor,
 ) -> tuple[dict[str, torch.Tensor], list[dict[str, float]]]:
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -105,6 +164,7 @@ def fit_stage(
     best_validation = math.inf
     stale_epochs = 0
     history = []
+    direction_class_weights = direction_class_weights.to(device)
     for epoch in range(1, config.epochs + 1):
         started = time.perf_counter()
         train_loss = _run_epoch(
@@ -114,6 +174,8 @@ def fit_stage(
             optimizer=optimizer,
             scaler=scaler if device.type == "cuda" else None,
             target_scaler=target_scaler,
+            direction_class_weights=direction_class_weights,
+            config=config,
             gradient_clip=config.gradient_clip,
         )
         with torch.inference_mode():
@@ -124,6 +186,8 @@ def fit_stage(
                 optimizer=None,
                 scaler=None,
                 target_scaler=target_scaler,
+                direction_class_weights=direction_class_weights,
+                config=config,
                 gradient_clip=config.gradient_clip,
             )
         if not math.isfinite(train_loss) or not math.isfinite(validation_loss):
@@ -170,6 +234,68 @@ def predict_quantiles(
             predictions.append(output.cpu().numpy())
             targets.append(batch_targets.cpu().numpy())
     return np.concatenate(predictions), np.concatenate(targets)
+
+
+def predict_outputs(
+    model: QuantileTCN,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    target_scaler: RobustTargetScaler,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    model.eval()
+    predictions = []
+    direction_logits = []
+    targets = []
+    with torch.inference_mode():
+        for features, batch_targets in loader:
+            quantiles, logits = model.forward_heads(features.to(device, non_blocking=True))
+            output = ordered_quantiles(target_scaler.inverse_tensor(quantiles))
+            predictions.append(output.cpu().numpy())
+            direction_logits.append(logits.cpu().numpy())
+            targets.append(batch_targets.cpu().numpy())
+    return (
+        np.concatenate(predictions),
+        np.concatenate(direction_logits),
+        np.concatenate(targets),
+    )
+
+
+def direction_metrics(
+    logits: np.ndarray,
+    targets: np.ndarray,
+    horizons_minutes: Iterable[int],
+    *,
+    actionable_move_pct: float,
+) -> dict[str, dict[str, float]]:
+    horizons = tuple(horizons_minutes)
+    if logits.shape != (len(targets), len(horizons), 3):
+        raise ValueError("direction logits do not match targets and horizons")
+    actual = np.ones_like(targets, dtype=np.int8)
+    actual[targets <= -actionable_move_pct] = 0
+    actual[targets >= actionable_move_pct] = 2
+    predicted = logits.argmax(axis=-1)
+    result = {}
+    for index, horizon in enumerate(horizons):
+        recalls = []
+        f1_scores = []
+        for class_index in range(3):
+            truth = actual[:, index] == class_index
+            chosen = predicted[:, index] == class_index
+            true_positive = np.sum(truth & chosen)
+            precision = true_positive / max(1, np.sum(chosen))
+            recall = true_positive / max(1, np.sum(truth))
+            recalls.append(recall)
+            f1_scores.append(2 * precision * recall / (precision + recall) if precision + recall else 0.0)
+        result[f"{horizon}m"] = {
+            "accuracy": float(np.mean(predicted[:, index] == actual[:, index])),
+            "balanced_accuracy": float(np.mean(recalls)),
+            "macro_f1": float(np.mean(f1_scores)),
+            "always_hold_accuracy": float(np.mean(actual[:, index] == 1)),
+            "predicted_action_rate": float(np.mean(predicted[:, index] != 1)),
+            "actual_action_rate": float(np.mean(actual[:, index] != 1)),
+        }
+    return result
 
 
 def quantile_metrics(

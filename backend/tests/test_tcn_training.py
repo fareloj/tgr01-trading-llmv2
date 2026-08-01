@@ -19,7 +19,13 @@ from backend.ml.sequences import (
     observed_target_indices,
 )
 from backend.ml.tcn import CausalConv1d, QuantileTCN, TCNConfig, quantile_loss
-from backend.ml.training import predict_quantiles
+from backend.ml.training import (
+    direction_classes,
+    direction_loss,
+    direction_metrics,
+    fit_direction_class_weights,
+    predict_quantiles,
+)
 
 
 def test_continuous_indices_reject_gaps_and_segment_boundaries():
@@ -141,6 +147,12 @@ def test_tcn_covers_sequence_and_returns_quantiles():
     assert config.receptive_field >= 240
     assert output.shape == (4, 2, 3)
 
+    quantiles, directions = model.forward_heads(
+        torch.randn(4, len(FEATURE_COLUMNS), 240)
+    )
+    assert quantiles.shape == (4, 2, 3)
+    assert directions.shape == (4, 2, 3)
+
 
 def test_quantile_loss_penalizes_crossed_outputs():
     targets = torch.zeros(2, 2)
@@ -148,6 +160,39 @@ def test_quantile_loss_penalizes_crossed_outputs():
     crossed = ordered.flip(-1)
 
     assert quantile_loss(crossed, targets) > quantile_loss(ordered, targets)
+
+
+def test_direction_objective_maps_and_weights_all_classes():
+    targets = np.array(
+        [[-0.5, -0.3], [0.0, 0.0], [0.6, 0.4], [0.1, -0.1]],
+        dtype=np.float32,
+    )
+    weights = fit_direction_class_weights(targets, actionable_move_pct=0.2)
+    classes = direction_classes(torch.from_numpy(targets), 0.2)
+    logits = torch.zeros(4, 2, 3)
+
+    loss = direction_loss(
+        logits,
+        torch.from_numpy(targets),
+        actionable_move_pct=0.2,
+        class_weights=weights,
+    )
+
+    assert classes.tolist() == [[0, 0], [1, 1], [2, 2], [1, 1]]
+    assert weights.shape == (2, 3)
+    assert torch.isfinite(loss)
+
+
+def test_direction_metrics_expose_hold_baseline_and_balanced_score():
+    targets = np.array([[-0.3], [0.0], [0.4]], dtype=np.float32)
+    logits = np.array([[[5.0, 0.0, 0.0]], [[0.0, 5.0, 0.0]], [[0.0, 0.0, 5.0]]])
+
+    metrics = direction_metrics(logits, targets, (15,), actionable_move_pct=0.2)["15m"]
+
+    assert metrics["accuracy"] == 1.0
+    assert metrics["balanced_accuracy"] == 1.0
+    assert metrics["macro_f1"] == 1.0
+    assert metrics["always_hold_accuracy"] == 1 / 3
 
 
 def test_device_batcher_matches_host_dataset_when_cuda_is_available():

@@ -35,7 +35,10 @@ from backend.ml.sequences import (
 from backend.ml.tcn import QuantileTCN, TCNConfig
 from backend.ml.training import (
     StageConfig,
+    direction_metrics,
     fit_stage,
+    fit_direction_class_weights,
+    predict_outputs,
     predict_quantiles,
     quantile_metrics,
     set_reproducible_seed,
@@ -281,6 +284,10 @@ def main() -> int:
         global_data.targets[global_indices["train"]],
         HORIZONS,
     )
+    global_direction_weights = fit_direction_class_weights(
+        global_data.targets[global_indices["train"]],
+        actionable_move_pct=0.20,
+    )
     global_device_data = (
         DeviceMarketData.from_arrays(global_data, device)
         if device.type == "cuda" and not args.host_loader
@@ -316,6 +323,7 @@ def main() -> int:
             patience=max(1, min(2, args.global_epochs)),
         ),
         target_scaler=target_scaler,
+        direction_class_weights=global_direction_weights,
     )
     provenance = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -329,6 +337,8 @@ def main() -> int:
         "tcn_config": tcn_config.as_dict(),
         "scaler": scaler.as_dict(),
         "target_scaler": target_scaler.as_dict(),
+        "actionable_move_pct": 0.20,
+        "global_direction_class_weights": global_direction_weights.tolist(),
         "global_dataset": global_fingerprint,
         "global_ranges": global_ranges.as_dict(),
         "global_sequences": {name: len(value) for name, value in global_indices.items()},
@@ -365,6 +375,10 @@ def main() -> int:
         device=device,
         device_data=local_device_data,
     )
+    local_direction_weights = fit_direction_class_weights(
+        local_data.targets[local_indices["train"]],
+        actionable_move_pct=0.20,
+    )
     local_validation = _loader(
         local_data,
         local_indices["validation"],
@@ -385,8 +399,9 @@ def main() -> int:
             patience=max(1, min(2, args.local_epochs)),
         ),
         target_scaler=target_scaler,
+        direction_class_weights=local_direction_weights,
     )
-    validation_predictions, validation_targets = predict_quantiles(
+    validation_predictions, validation_direction_logits, validation_targets = predict_outputs(
         model,
         local_validation,
         device=device,
@@ -397,13 +412,21 @@ def main() -> int:
         validation_targets,
         HORIZONS,
     )
+    validation_direction_metrics = direction_metrics(
+        validation_direction_logits,
+        validation_targets,
+        HORIZONS,
+        actionable_move_pct=0.20,
+    )
     checkpoint_payload = {
         **provenance,
         "local_dataset": local_fingerprint,
         "local_ranges": local_ranges.as_dict(),
         "local_sequences": {name: len(value) for name, value in local_indices.items()},
         "local_history": local_history,
+        "local_direction_class_weights": local_direction_weights.tolist(),
         "validation_quantile_metrics": validation_quantile_metrics,
+        "validation_direction_metrics": validation_direction_metrics,
         "test_evaluated": bool(args.evaluate_test),
         "boundary": (
             "Offline research checkpoint only. It cannot place paper or live orders and remains "
@@ -444,7 +467,15 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "training_report.json"
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(json.dumps({"validation_quantile_metrics": validation_quantile_metrics}, indent=2))
+    print(
+        json.dumps(
+            {
+                "validation_quantile_metrics": validation_quantile_metrics,
+                "validation_direction_metrics": validation_direction_metrics,
+            },
+            indent=2,
+        )
+    )
     print(json.dumps(report.get("test_quantile_metrics", {}), indent=2))
     print(json.dumps(report.get("test_policy_15m", {}), indent=2))
     print(f"checkpoint={output_dir / 'local_best.pt'}")
