@@ -81,6 +81,8 @@ class ExternalRagSearch:
     results: tuple[ExternalRagHit, ...]
     rejected_results: int = 0
     error: str | None = None
+    retrieval_mode: str = "hybrid_reranked"
+    fallback_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -95,11 +97,16 @@ class ExternalRagClient:
         base_url: str | None = None,
         corpus: str | None = None,
         timeout_seconds: float | None = None,
+        reranker_timeout_seconds: float | None = None,
         session: requests.Session | None = None,
     ):
         self.base_url = (base_url or os.getenv("EXTERNAL_RAG_URL") or DEFAULT_BASE_URL).rstrip("/")
         self.corpus = corpus or os.getenv("EXTERNAL_RAG_CORPUS") or DEFAULT_CORPUS
         self.timeout_seconds = float(timeout_seconds or os.getenv("EXTERNAL_RAG_TIMEOUT_SECONDS", "30"))
+        self.reranker_timeout_seconds = float(
+            reranker_timeout_seconds
+            or os.getenv("EXTERNAL_RAG_RERANKER_TIMEOUT_SECONDS", str(min(self.timeout_seconds, 15.0)))
+        )
         self.session = session or requests.Session()
 
     def health(self) -> dict[str, Any]:
@@ -165,19 +172,36 @@ class ExternalRagClient:
             if value
         }
         bounded_top_k = max(1, min(int(top_k), 10))
+        request_payload = {
+            "query": normalized_query,
+            "top_k": bounded_top_k,
+            "use_reranker": bool(use_reranker),
+            "filters": filters,
+        }
+        retrieval_mode = "hybrid_reranked" if use_reranker else "hybrid_without_reranker"
+        fallback_reason = None
         try:
-            response = self.session.post(
-                f"{self.base_url}/v1/search",
-                json={
-                    "query": normalized_query,
-                    "top_k": bounded_top_k,
-                    "use_reranker": bool(use_reranker),
-                    "filters": filters,
-                },
-                headers={"X-Request-ID": request_id},
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
+            try:
+                response = self.session.post(
+                    f"{self.base_url}/v1/search",
+                    json=request_payload,
+                    headers={"X-Request-ID": request_id},
+                    timeout=(self.reranker_timeout_seconds if use_reranker else self.timeout_seconds),
+                )
+                response.raise_for_status()
+            except requests.RequestException as primary_error:
+                if not use_reranker:
+                    raise
+                fallback_reason = type(primary_error).__name__
+                retrieval_mode = "hybrid_without_reranker"
+                fallback_payload = {**request_payload, "use_reranker": False}
+                response = self.session.post(
+                    f"{self.base_url}/v1/search",
+                    json=fallback_payload,
+                    headers={"X-Request-ID": f"{request_id}-fallback"},
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
             payload = response.json()
             hits = []
             rejected = 0
@@ -218,6 +242,8 @@ class ExternalRagClient:
                 latency_ms=round((time.perf_counter() - started) * 1000.0, 2),
                 results=tuple(hits),
                 rejected_results=rejected,
+                retrieval_mode=retrieval_mode,
+                fallback_reason=fallback_reason,
             )
         except (requests.RequestException, ValueError, TypeError) as error:
             result = ExternalRagSearch(
@@ -228,6 +254,8 @@ class ExternalRagClient:
                 latency_ms=round((time.perf_counter() - started) * 1000.0, 2),
                 results=(),
                 error=type(error).__name__,
+                retrieval_mode="unavailable",
+                fallback_reason=fallback_reason,
             )
         if audit:
             self._audit(result, purpose=purpose, filters=filters)
@@ -242,6 +270,8 @@ class ExternalRagClient:
             "latency_ms": result.latency_ms,
             "rejected_results": result.rejected_results,
             "error": result.error,
+            "retrieval_mode": result.retrieval_mode,
+            "fallback_reason": result.fallback_reason,
         }
         try:
             repository.insert_retrieval_log(

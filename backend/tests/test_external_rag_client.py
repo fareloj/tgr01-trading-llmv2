@@ -40,6 +40,18 @@ class FakeSession:
         return FakeResponse(self.search_payload)
 
 
+class RerankerTimeoutSession(FakeSession):
+    def __init__(self, *, search):
+        super().__init__(search=search)
+        self.posts = []
+
+    def post(self, *args, **kwargs):
+        self.posts.append(kwargs)
+        if kwargs["json"]["use_reranker"]:
+            raise requests.ReadTimeout()
+        return FakeResponse(self.search_payload)
+
+
 def _health(lexical_indexed: int = 10, dense_indexed: int = 10):
     return {
         "status": "ok",
@@ -127,6 +139,37 @@ def test_unavailable_rag_fails_open_without_results():
     assert result.status == "unavailable"
     assert result.results == ()
     assert result.error == "Timeout"
+
+
+def test_reranker_timeout_falls_back_once_to_hybrid_search():
+    session = RerankerTimeoutSession(
+        search={
+            "results": [
+                {
+                    "chunk_id": "safe",
+                    "corpus": "trading",
+                    "path": "backend/risk/risk_manager.py",
+                    "text": "deterministic risk",
+                    "security_flags": [],
+                }
+            ]
+        }
+    )
+    client = ExternalRagClient(
+        session=session,
+        corpus="trading",
+        timeout_seconds=3,
+        reranker_timeout_seconds=1,
+    )
+
+    result = client.search("risk", audit=False)
+
+    assert result.status == "ok"
+    assert result.retrieval_mode == "hybrid_without_reranker"
+    assert result.fallback_reason == "ReadTimeout"
+    assert [item.chunk_id for item in result.results] == ["safe"]
+    assert [request["json"]["use_reranker"] for request in session.posts] == [True, False]
+    assert [request["timeout"] for request in session.posts] == [1.0, 3.0]
 
 
 def test_search_rejects_result_from_another_corpus():
