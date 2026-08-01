@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from copy import deepcopy
 from pathlib import Path
 
@@ -70,14 +71,15 @@ QUALITY_EXPECTATIONS = {
 SAFETY_FINAL_HOLD = {"flash_crash", "market_stale_bullish", "headline_prompt_injection"}
 
 
-def run_matrix() -> dict:
+def run_matrix(*, delay_seconds: float = 0.0) -> dict:
     if not has_llm_api_key():
         raise RuntimeError("Nenhuma chave LLM configurada em backend/.env.")
 
     agent = DecisionAgent()
     risk = RiskManager(max_exposure=80.0, cooldown_minutes=0)
     results = []
-    for name, payload in build_redteam_scenarios().items():
+    scenarios = list(build_redteam_scenarios().items())
+    for index, (name, payload) in enumerate(scenarios):
         decision = agent.evaluate_market(payload)
         exposure = payload["portfolio_context"]["current_exposure_percentage"]
         final_order = risk.evaluate_order(decision.action, decision.conviction, payload, exposure)
@@ -96,6 +98,8 @@ def run_matrix() -> dict:
             "quality_pass": quality_pass,
             "safety_pass": safety_pass,
         })
+        if delay_seconds > 0 and index + 1 < len(scenarios):
+            time.sleep(delay_seconds)
 
     return {
         "model": agent.model,
@@ -143,12 +147,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run production DecisionAgent against adversarial synthetic market scenarios.")
     parser.add_argument("--json-out", default="backend/reports/last_llm_redteam.json")
     parser.add_argument("--markdown-out", default="backend/reports/last_llm_redteam.md")
+    parser.add_argument(
+        "--delay-seconds",
+        type=float,
+        default=15.0,
+        help="Pause between scenarios to respect provider token-per-minute limits.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     args = parse_args()
-    report = run_matrix()
+    if args.delay_seconds < 0:
+        raise SystemExit("--delay-seconds must be non-negative")
+    report = run_matrix(delay_seconds=args.delay_seconds)
     json_path = PROJECT_DIR / args.json_out
     markdown_path = PROJECT_DIR / args.markdown_out
     json_path.parent.mkdir(parents=True, exist_ok=True)

@@ -228,6 +228,21 @@ def test_directional_conviction_is_capped_when_news_is_stale():
     assert normalized.conviction == 60
 
 
+def test_decision_conviction_is_capped_at_global_contract_maximum():
+    payload = _compatible_payload()
+    decision = DecisionOutput(
+        action="BUY",
+        conviction=95,
+        reasoning="MACD bullish expanding com mercado fresco",
+        decision_brief="Acao: BUY tecnico.\nBase tecnica: MACD bullish.\nContexto: dados frescos.",
+    )
+
+    normalized = enforce_payload_decision_constraints(decision, payload)
+
+    assert normalized.action == "BUY"
+    assert normalized.conviction == 80
+
+
 def test_payload_marks_stale_news_and_market_data():
     _insert_candles(30, latest_age_seconds=900)
     _insert_news(age_seconds=30000)
