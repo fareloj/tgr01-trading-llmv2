@@ -589,6 +589,8 @@ def main() -> int:
             actionable_move_pct=0.20,
             actual_classes=test_direction_targets,
         )
+        checkpoint_payload["test_quantile_metrics"] = report["test_quantile_metrics"]
+        checkpoint_payload["test_direction_metrics"] = report["test_direction_metrics"]
         report["test_policy_15m"] = _policy_metrics(
             predictions,
             targets,
@@ -598,6 +600,7 @@ def main() -> int:
             actionable_move_pct=0.20,
             round_trip_cost_pct=0.15,
         )
+        checkpoint_payload["test_policy_15m"] = report["test_policy_15m"]
     save_tcn_checkpoint(output_dir / "local_best.pt", model, checkpoint_payload)
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "training_report.json"
