@@ -251,7 +251,12 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--global-stride", type=int, default=15)
     parser.add_argument("--local-stride", type=int, default=5)
-    parser.add_argument("--global-epochs", type=int, default=3)
+    parser.add_argument(
+        "--global-epochs",
+        type=int,
+        default=3,
+        help="Use zero for a random-initialization ablation without global pretraining.",
+    )
     parser.add_argument("--local-epochs", type=int, default=3)
     parser.add_argument("--global-learning-rate", type=float, default=1e-3)
     parser.add_argument("--local-learning-rate", type=float, default=2e-4)
@@ -267,7 +272,12 @@ def main() -> int:
     )
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
     args = parser.parse_args()
-    if args.direction_loss_weight < 0 or not 0 <= args.class_weight_power <= 1:
+    if (
+        args.global_epochs < 0
+        or args.local_epochs <= 0
+        or args.direction_loss_weight < 0
+        or not 0 <= args.class_weight_power <= 1
+    ):
         parser.error("multi-task loss arguments are invalid")
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -317,38 +327,42 @@ def main() -> int:
         else None
     )
     model = QuantileTCN(tcn_config).to(device)
-    global_train = _loader(
-        global_data,
-        global_indices["train"],
-        sequence_length=args.sequence_length,
-        batch_size=args.batch_size,
-        shuffle=True,
-        device=device,
-        device_data=global_device_data,
-    )
-    global_validation = _loader(
-        global_data,
-        global_indices["validation"],
-        sequence_length=args.sequence_length,
-        batch_size=args.batch_size,
-        shuffle=False,
-        device=device,
-        device_data=global_device_data,
-    )
-    _, global_history = fit_stage(
-        model,
-        global_train,
-        global_validation,
-        device=device,
-        config=StageConfig(
-            epochs=args.global_epochs,
-            learning_rate=args.global_learning_rate,
-            patience=max(1, min(2, args.global_epochs)),
-            direction_loss_weight=args.direction_loss_weight,
-        ),
-        target_scaler=target_scaler,
-        direction_class_weights=global_direction_weights,
-    )
+    global_train = None
+    global_validation = None
+    global_history = []
+    if args.global_epochs:
+        global_train = _loader(
+            global_data,
+            global_indices["train"],
+            sequence_length=args.sequence_length,
+            batch_size=args.batch_size,
+            shuffle=True,
+            device=device,
+            device_data=global_device_data,
+        )
+        global_validation = _loader(
+            global_data,
+            global_indices["validation"],
+            sequence_length=args.sequence_length,
+            batch_size=args.batch_size,
+            shuffle=False,
+            device=device,
+            device_data=global_device_data,
+        )
+        _, global_history = fit_stage(
+            model,
+            global_train,
+            global_validation,
+            device=device,
+            config=StageConfig(
+                epochs=args.global_epochs,
+                learning_rate=args.global_learning_rate,
+                patience=max(1, min(2, args.global_epochs)),
+                direction_loss_weight=args.direction_loss_weight,
+            ),
+            target_scaler=target_scaler,
+            direction_class_weights=global_direction_weights,
+        )
     provenance = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "python": platform.python_version(),
@@ -369,9 +383,11 @@ def main() -> int:
         "global_ranges": global_ranges.as_dict(),
         "global_sequences": {name: len(value) for name, value in global_indices.items()},
         "global_history": global_history,
+        "global_pretraining_skipped": args.global_epochs == 0,
     }
     _assert_dataset_unchanged(global_fingerprint)
-    save_tcn_checkpoint(output_dir / "global_best.pt", model, provenance)
+    if args.global_epochs:
+        save_tcn_checkpoint(output_dir / "global_best.pt", model, provenance)
     del global_train, global_validation, global_device_data, global_data, global_indices
     gc.collect()
     if device.type == "cuda":
