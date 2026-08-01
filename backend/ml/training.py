@@ -46,8 +46,14 @@ def fit_direction_class_weights(
     targets: np.ndarray,
     *,
     actionable_move_pct: float,
+    weighting_power: float = 0.5,
 ) -> torch.Tensor:
-    if targets.ndim != 2 or len(targets) == 0 or actionable_move_pct <= 0:
+    if (
+        targets.ndim != 2
+        or len(targets) == 0
+        or actionable_move_pct <= 0
+        or not 0 <= weighting_power <= 1
+    ):
         raise ValueError("direction class weight inputs are invalid")
     tensor = torch.from_numpy(targets.astype(np.float32, copy=False))
     classes = direction_classes(tensor, actionable_move_pct)
@@ -56,8 +62,8 @@ def fit_direction_class_weights(
         counts = torch.bincount(classes[:, horizon], minlength=3).float()
         if torch.any(counts == 0):
             raise ValueError("each direction class must occur in training data")
-        inverse_sqrt = counts.rsqrt()
-        weights.append(inverse_sqrt / inverse_sqrt.mean())
+        inverse_frequency = counts.pow(-weighting_power)
+        weights.append(inverse_frequency / inverse_frequency.mean())
     return torch.stack(weights)
 
 
@@ -278,6 +284,7 @@ def direction_metrics(
     result = {}
     for index, horizon in enumerate(horizons):
         recalls = []
+        precisions = []
         f1_scores = []
         for class_index in range(3):
             truth = actual[:, index] == class_index
@@ -286,6 +293,7 @@ def direction_metrics(
             precision = true_positive / max(1, np.sum(chosen))
             recall = true_positive / max(1, np.sum(truth))
             recalls.append(recall)
+            precisions.append(precision)
             f1_scores.append(2 * precision * recall / (precision + recall) if precision + recall else 0.0)
         result[f"{horizon}m"] = {
             "accuracy": float(np.mean(predicted[:, index] == actual[:, index])),
@@ -294,6 +302,12 @@ def direction_metrics(
             "always_hold_accuracy": float(np.mean(actual[:, index] == 1)),
             "predicted_action_rate": float(np.mean(predicted[:, index] != 1)),
             "actual_action_rate": float(np.mean(actual[:, index] != 1)),
+            "sell_precision": float(precisions[0]),
+            "sell_recall": float(recalls[0]),
+            "hold_precision": float(precisions[1]),
+            "hold_recall": float(recalls[1]),
+            "buy_precision": float(precisions[2]),
+            "buy_recall": float(recalls[2]),
         }
     return result
 

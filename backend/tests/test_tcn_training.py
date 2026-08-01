@@ -17,6 +17,7 @@ from backend.ml.sequences import (
     continuous_end_indices,
     derive_continuous_segments,
     observed_target_indices,
+    split_temporal_bounds,
 )
 from backend.ml.tcn import CausalConv1d, QuantileTCN, TCNConfig, quantile_loss
 from backend.ml.training import (
@@ -101,6 +102,20 @@ def test_temporal_ranges_purge_targets_before_boundaries():
     test_start = timestamps[ranges.test[0]]
     assert timestamps[ranges.train[1] - 1] + 60 * 60 < validation_start
     assert timestamps[ranges.validation[1] - 1] + 60 * 60 < test_start
+
+
+def test_temporal_subranges_keep_calibration_after_purged_selection():
+    timestamps = np.arange(1_000, dtype=np.int64) * 60 + 1_800_000_000
+    first, second = split_temporal_bounds(
+        timestamps,
+        (600, 800),
+        first_ratio=0.60,
+        purge_minutes=60,
+    )
+
+    assert first[0] == 600
+    assert second == (720, 800)
+    assert timestamps[first[1] - 1] + 60 * 60 < timestamps[second[0]]
 
 
 def test_scaler_is_unchanged_by_validation_outlier():

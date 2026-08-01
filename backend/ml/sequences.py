@@ -257,6 +257,34 @@ def chronological_ranges(
     return ranges
 
 
+def split_temporal_bounds(
+    timestamps: np.ndarray,
+    bounds: tuple[int, int],
+    *,
+    first_ratio: float = 0.60,
+    purge_minutes: int = 60,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    start, end = bounds
+    if not 0 <= start < end <= len(timestamps):
+        raise ValueError("temporal bounds are invalid")
+    if not 0 < first_ratio < 1 or purge_minutes < 0:
+        raise ValueError("split ratio or purge is invalid")
+    cut = start + int((end - start) * first_ratio)
+    second_start_timestamp = int(timestamps[cut])
+    first_end = int(
+        np.searchsorted(
+            timestamps,
+            second_start_timestamp - purge_minutes * 60,
+            side="left",
+        )
+    )
+    first = (start, min(first_end, end))
+    second = (cut, end)
+    if first[1] <= first[0] or second[1] <= second[0]:
+        raise ValueError("purge interval produced an empty temporal subrange")
+    return first, second
+
+
 def continuous_end_indices(
     timestamps: np.ndarray,
     segment_ids: np.ndarray,

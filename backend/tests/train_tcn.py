@@ -31,6 +31,7 @@ from backend.ml.sequences import (
     load_market_arrays,
     observed_target_indices,
     sha256_file,
+    split_temporal_bounds,
 )
 from backend.ml.tcn import QuantileTCN, TCNConfig
 from backend.ml.training import (
@@ -164,12 +165,21 @@ def _prepare_domain(
     train_stride: int,
     evaluation_stride: int,
     maximum_sequences: int | None,
+    calibration: bool = False,
 ) -> tuple[ArrayMarketData, RobustFeatureScaler, object, dict[str, np.ndarray]]:
     data = load_market_arrays(path, HORIZONS)
     ranges = chronological_ranges(data.timestamps, purge_minutes=max(HORIZONS))
     if scaler is None:
         scaler = RobustFeatureScaler.fit(data.features[slice(*ranges.train)])
     data = replace(data, features=scaler.transform(data.features))
+    validation_bounds = ranges.validation
+    calibration_bounds = None
+    if calibration:
+        validation_bounds, calibration_bounds = split_temporal_bounds(
+            data.timestamps,
+            ranges.validation,
+            purge_minutes=max(HORIZONS),
+        )
     indices = {
         "train": _indices_for_range(
             data,
@@ -180,7 +190,7 @@ def _prepare_domain(
         ),
         "validation": _indices_for_range(
             data,
-            ranges.validation,
+            validation_bounds,
             sequence_length=sequence_length,
             stride=evaluation_stride,
             maximum=maximum_sequences,
@@ -193,6 +203,14 @@ def _prepare_domain(
             maximum=maximum_sequences,
         ),
     }
+    if calibration_bounds is not None:
+        indices["calibration"] = _indices_for_range(
+            data,
+            calibration_bounds,
+            sequence_length=sequence_length,
+            stride=evaluation_stride,
+            maximum=maximum_sequences,
+        )
     return data, scaler, ranges, indices
 
 
@@ -237,6 +255,8 @@ def main() -> int:
     parser.add_argument("--local-epochs", type=int, default=3)
     parser.add_argument("--global-learning-rate", type=float, default=1e-3)
     parser.add_argument("--local-learning-rate", type=float, default=2e-4)
+    parser.add_argument("--direction-loss-weight", type=float, default=0.25)
+    parser.add_argument("--class-weight-power", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=1701)
     parser.add_argument("--maximum-sequences", type=int)
     parser.add_argument("--evaluate-test", action="store_true")
@@ -247,6 +267,8 @@ def main() -> int:
     )
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
     args = parser.parse_args()
+    if args.direction_loss_weight < 0 or not 0 <= args.class_weight_power <= 1:
+        parser.error("multi-task loss arguments are invalid")
 
     if args.device == "cuda" and not torch.cuda.is_available():
         raise SystemExit("CUDA was requested but torch.cuda.is_available() is false")
@@ -287,6 +309,7 @@ def main() -> int:
     global_direction_weights = fit_direction_class_weights(
         global_data.targets[global_indices["train"]],
         actionable_move_pct=0.20,
+        weighting_power=args.class_weight_power,
     )
     global_device_data = (
         DeviceMarketData.from_arrays(global_data, device)
@@ -321,6 +344,7 @@ def main() -> int:
             epochs=args.global_epochs,
             learning_rate=args.global_learning_rate,
             patience=max(1, min(2, args.global_epochs)),
+            direction_loss_weight=args.direction_loss_weight,
         ),
         target_scaler=target_scaler,
         direction_class_weights=global_direction_weights,
@@ -338,6 +362,8 @@ def main() -> int:
         "scaler": scaler.as_dict(),
         "target_scaler": target_scaler.as_dict(),
         "actionable_move_pct": 0.20,
+        "direction_loss_weight": args.direction_loss_weight,
+        "class_weight_power": args.class_weight_power,
         "global_direction_class_weights": global_direction_weights.tolist(),
         "global_dataset": global_fingerprint,
         "global_ranges": global_ranges.as_dict(),
@@ -359,6 +385,7 @@ def main() -> int:
         train_stride=args.local_stride,
         evaluation_stride=args.local_stride,
         maximum_sequences=args.maximum_sequences,
+        calibration=True,
     )
     print(f"local_sequences={dict((name, len(value)) for name, value in local_indices.items())}")
     local_device_data = (
@@ -378,6 +405,7 @@ def main() -> int:
     local_direction_weights = fit_direction_class_weights(
         local_data.targets[local_indices["train"]],
         actionable_move_pct=0.20,
+        weighting_power=args.class_weight_power,
     )
     local_validation = _loader(
         local_data,
@@ -397,24 +425,34 @@ def main() -> int:
             epochs=args.local_epochs,
             learning_rate=args.local_learning_rate,
             patience=max(1, min(2, args.local_epochs)),
+            direction_loss_weight=args.direction_loss_weight,
         ),
         target_scaler=target_scaler,
         direction_class_weights=local_direction_weights,
     )
-    validation_predictions, validation_direction_logits, validation_targets = predict_outputs(
+    calibration_loader = _loader(
+        local_data,
+        local_indices["calibration"],
+        sequence_length=args.sequence_length,
+        batch_size=args.batch_size,
+        shuffle=False,
+        device=device,
+        device_data=local_device_data,
+    )
+    calibration_predictions, calibration_direction_logits, calibration_targets = predict_outputs(
         model,
-        local_validation,
+        calibration_loader,
         device=device,
         target_scaler=target_scaler,
     )
-    validation_quantile_metrics = quantile_metrics(
-        validation_predictions,
-        validation_targets,
+    calibration_quantile_metrics = quantile_metrics(
+        calibration_predictions,
+        calibration_targets,
         HORIZONS,
     )
-    validation_direction_metrics = direction_metrics(
-        validation_direction_logits,
-        validation_targets,
+    calibration_direction_metrics = direction_metrics(
+        calibration_direction_logits,
+        calibration_targets,
         HORIZONS,
         actionable_move_pct=0.20,
     )
@@ -425,8 +463,8 @@ def main() -> int:
         "local_sequences": {name: len(value) for name, value in local_indices.items()},
         "local_history": local_history,
         "local_direction_class_weights": local_direction_weights.tolist(),
-        "validation_quantile_metrics": validation_quantile_metrics,
-        "validation_direction_metrics": validation_direction_metrics,
+        "calibration_quantile_metrics": calibration_quantile_metrics,
+        "calibration_direction_metrics": calibration_direction_metrics,
         "test_evaluated": bool(args.evaluate_test),
         "boundary": (
             "Offline research checkpoint only. It cannot place paper or live orders and remains "
@@ -470,8 +508,8 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "validation_quantile_metrics": validation_quantile_metrics,
-                "validation_direction_metrics": validation_direction_metrics,
+                "calibration_quantile_metrics": calibration_quantile_metrics,
+                "calibration_direction_metrics": calibration_direction_metrics,
             },
             indent=2,
         )
