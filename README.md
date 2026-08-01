@@ -28,6 +28,11 @@ vulnerabilities, and `7/7` LLM safety checks. Directional quality was `6/7`:
 the remaining review case is an overly conservative `HOLD` in a clean bearish
 scenario.
 
+The [deterministic tool protocol report](LLM_TOOL_RED_TEAM_REPORT_2026-08-01.md)
+adds bounded LLM-requested analysis tools, objective market-event memory, and
+historical model/prompt benchmarks. The expanded suite records `122` passing
+Python tests. This layer remains opt-in and paper-only.
+
 ## Interfaces
 
 Both interfaces operate the same allowlisted Python pipeline. Neither interface
@@ -56,13 +61,15 @@ diagnostic access to the external hybrid RAG.
 3. PostgreSQL stores market data, news, health, paper capital, decisions, and
    retrieval audit records.
 4. Python computes RSI, MACD, ATR, freshness, news risk, and exposure.
-5. The Decision Agent returns a Pydantic-validated action and a short evidence
+5. Optionally, the LLM selects up to three allowlisted analysis contracts;
+   Python executes the read-only calculations and returns their results.
+6. The Decision Agent returns a Pydantic-validated action and a short evidence
    brief.
-6. The deterministic Risk Manager can block the suggestion or reduce its
+7. The deterministic Risk Manager can block the suggestion or reduce its
    reliability.
-7. The paper executor applies fees/slippage and updates the simulated position
+8. The paper executor applies fees/slippage and updates the simulated position
    transactionally.
-8. Reports compare suggestions, final decisions, entries, and later market
+9. Reports compare suggestions, final decisions, entries, and later market
    movement without claiming an absolute "accuracy" score.
 
 ## Safety Model
@@ -106,6 +113,9 @@ Mercado Bitcoin (read-only)       RSS news feeds
                          |
             RSI / MACD / ATR / health
                          |
+              optional bounded tool plan
+             trend / Donchian / drawdown / volume
+                         |
                          v
                  Decision Agent LLM
              strict Pydantic contract
@@ -140,6 +150,34 @@ profile treats stale news as uncertainty rather than automatically confusing it
 with stale market prices, while the Risk Manager remains independently
 authoritative.
 
+### Deterministic analysis tools
+
+The optional tool protocol exposes four fixed calculations:
+
+- multi-timeframe trend alignment;
+- Donchian range breakout;
+- drawdown and downside semideviation;
+- volume/OBV confirmation.
+
+The model selects a Pydantic contract, not an executable function body. The
+application enforces fixed windows, a three-call limit, a 1,500-candle limit,
+`as_of_timestamp`, strict extra-field rejection, compact results, and
+best-effort audit persistence. Failures return `ERROR` or
+`INSUFFICIENT_DATA`; they never become directional evidence. Objective
+drawdowns of at least 3% can be deduplicated as structured market events, but
+the model cannot write arbitrary memories.
+
+The production path remains disabled by default. To exercise it in paper mode:
+
+```powershell
+$env:LLM_TOOLS_ENABLED="true"
+python .\backend\tests\run_paper_trading.py --cycles 10 --sleep 30
+```
+
+The code default is `openai/gpt-oss-120b`; `LLM_MODEL` can override it. Groq
+has announced the hosted Llama 3.3 70B shutdown for August 16, 2026, so it is
+kept only as a historical benchmark rather than the default.
+
 ## Data And Persistence
 
 The active application is PostgreSQL-only. A legacy SQLite database can be
@@ -155,6 +193,7 @@ Important stored entities include:
 - paper position/cost-basis state;
 - complete trade logs and compact market snapshots;
 - internal RAG documents/chunks/retrieval logs.
+- deterministic analysis-tool audits and objective market events.
 
 Pytest creates and destroys a separate database whose name must end in `_test`.
 The test harness refuses to point at the application database.
@@ -253,6 +292,17 @@ python .\backend\tests\run_historical_llm_scenarios.py --name uptrend --from-loc
 
 Historical replay is for decision analysis. It does not alter the live paper
 portfolio.
+
+Model and prompt comparison with the same deterministic evidence:
+
+```powershell
+python .\backend\tests\benchmark_tool_augmented_llm.py --cycles 3 `
+  --models groq:openai/gpt-oss-120b groq:qwen/qwen3.6-27b `
+  --profiles evidence_balanced trend_following
+```
+
+The research basis and exact safety boundaries are documented in
+[btc_trading_tools_research.md](btc_trading_tools_research.md).
 
 ## Reproducing The Latest Red Team
 

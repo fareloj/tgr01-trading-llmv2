@@ -164,3 +164,37 @@ rag_retrieval_logs = Table(
     Column('filters_json', String, nullable=False, server_default="'{}'"),
     Column('selected_chunk_ids_json', String, nullable=False, server_default="'[]'")
 )
+
+# 11. Deterministic Analysis Tool Audit
+analysis_tool_calls = Table(
+    'analysis_tool_calls',
+    metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('timestamp', Integer, nullable=False),
+    Column('as_of_timestamp', Integer, nullable=False),
+    Column('asset', String, nullable=False),
+    Column('timeframe', String, nullable=False),
+    Column('tool_name', String, nullable=False),
+    Column('request_json', String, nullable=False),
+    Column('status', String, nullable=False),
+    Column('result_json', String, nullable=False),
+    Column('latency_ms', Float, nullable=False),
+    Column('error_code', String, nullable=True),
+)
+Index('idx_analysis_tool_calls_as_of', analysis_tool_calls.c.as_of_timestamp)
+Index('idx_analysis_tool_calls_tool_status', analysis_tool_calls.c.tool_name, analysis_tool_calls.c.status)
+
+# 12. Objective Market Event Memory
+market_events = Table(
+    'market_events',
+    metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('asset', String, nullable=False),
+    Column('event_type', String, nullable=False),
+    Column('event_timestamp', Integer, nullable=False),
+    Column('detected_at', Integer, nullable=False),
+    Column('severity', String, nullable=False),
+    Column('metrics_json', String, nullable=False),
+    Column('dedupe_key', String, nullable=False, unique=True),
+)
+Index('idx_market_events_asset_timestamp', market_events.c.asset, market_events.c.event_timestamp)

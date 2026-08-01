@@ -7,7 +7,8 @@ from backend.core import database
 from backend.core.db_models import (
     metadata, klines, news, trade_logs, virtual_portfolio,
     paper_position_state, paper_position_reconciliations, system_health,
-    rag_documents, rag_chunks, rag_retrieval_logs
+    rag_documents, rag_chunks, rag_retrieval_logs, analysis_tool_calls,
+    market_events
 )
 
 class EngineProxy:
@@ -269,7 +270,8 @@ def clear_all_tables(connection=None):
     tables_to_clear = [
         'klines', 'news', 'trade_logs', 'virtual_portfolio',
         'paper_position_state', 'paper_position_reconciliations', 'system_health',
-        'rag_documents', 'rag_chunks', 'rag_retrieval_logs'
+        'rag_documents', 'rag_chunks', 'rag_retrieval_logs',
+        'analysis_tool_calls', 'market_events'
     ]
 
     if connection is not None:
@@ -365,3 +367,34 @@ def insert_retrieval_log(timestamp: int, purpose: str, query: str, filters_json:
         selected_chunk_ids_json=selected_chunk_ids_json
     )
     _execute_query(stmt, connection=connection)
+
+
+def add_analysis_tool_call(data: Dict[str, Any], connection=None) -> int:
+    """Persist a bounded tool request/result pair without exposing model secrets."""
+    stmt = insert(analysis_tool_calls).values(**data)
+    result = _execute_query(stmt, connection=connection)
+    return int(result.inserted_primary_key[0]) if result.inserted_primary_key else 0
+
+
+def get_analysis_tool_calls(limit: int = 100, connection=None) -> List[Dict[str, Any]]:
+    stmt = select(analysis_tool_calls).order_by(desc(analysis_tool_calls.c.id)).limit(limit)
+    result = _execute_query(stmt, connection=connection)
+    return [dict(row._mapping) for row in result]
+
+
+def add_market_event(data: Dict[str, Any], connection=None) -> bool:
+    """Insert an objective event once; duplicate detections are intentionally ignored."""
+    stmt = pg_insert(market_events).values(**data)
+    stmt = stmt.on_conflict_do_nothing(index_elements=['dedupe_key'])
+    stmt = stmt.returning(market_events.c.id)
+    result = _execute_query(stmt, connection=connection)
+    return result.scalar_one_or_none() is not None
+
+
+def get_market_events(asset: Optional[str] = None, limit: int = 100, connection=None) -> List[Dict[str, Any]]:
+    stmt = select(market_events)
+    if asset is not None:
+        stmt = stmt.where(market_events.c.asset == asset)
+    stmt = stmt.order_by(desc(market_events.c.event_timestamp)).limit(limit)
+    result = _execute_query(stmt, connection=connection)
+    return [dict(row._mapping) for row in result]

@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 from pathlib import Path
@@ -99,7 +100,23 @@ def run_trading_cycle():
     if has_llm_api_key():
         print("[2/4] Consultando Decision Agent (LLM)...")
         agent = DecisionAgent()
-        llm_decision = agent.evaluate_market(payload)
+        if os.getenv("LLM_TOOLS_ENABLED", "false").strip().lower() in {"1", "true", "yes"}:
+            from backend.analysis.tool_engine import DeterministicToolEngine
+
+            print("      -> Ferramentas deterministicas habilitadas (maximo 3, somente leitura).")
+            evaluation = agent.evaluate_market_with_tools(
+                payload,
+                DeterministicToolEngine(audit=True, persist_events=True),
+                asset="BTC/BRL",
+                timeframe="1m",
+                as_of_timestamp=payload.get("data_health", {}).get("latest_kline_timestamp"),
+            )
+            payload = evaluation.enriched_payload
+            llm_decision = evaluation.decision
+            for result in evaluation.tool_results:
+                print(f"         tool={result.tool} status={result.status} latency={result.latency_ms:.1f}ms")
+        else:
+            llm_decision = agent.evaluate_market(payload)
     else:
         print("[2/4] (MOCK) GROQ_API_KEY ausente. Simulando IA...")
         from backend.agents.contracts import DecisionOutput

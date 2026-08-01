@@ -1,7 +1,7 @@
 import math
-from typing import Literal
+from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DecisionOutput(BaseModel):
@@ -42,3 +42,77 @@ class DecisionOutput(BaseModel):
         if len(lines) > 3:
             raise ValueError("decision_brief must have at most 3 non-empty lines")
         return "\n".join(lines)
+
+
+class StrictToolContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class MultiTimeframeTrendRequest(StrictToolContract):
+    tool: Literal["multi_timeframe_trend"]
+    windows_minutes: list[Literal[5, 15, 30, 60, 240]] = Field(
+        default=[15, 60, 240], min_length=1, max_length=4
+    )
+
+    @field_validator("windows_minutes")
+    @classmethod
+    def reject_duplicate_windows(cls, value: list[int]):
+        if len(value) != len(set(value)):
+            raise ValueError("trend windows cannot repeat")
+        return value
+
+
+class DonchianBreakoutRequest(StrictToolContract):
+    tool: Literal["donchian_breakout"]
+    lookback_candles: Literal[20, 55] = 20
+
+
+class DrawdownProfileRequest(StrictToolContract):
+    tool: Literal["drawdown_profile"]
+    lookback_minutes: Literal[60, 240, 1440] = 240
+
+
+class VolumeConfirmationRequest(StrictToolContract):
+    tool: Literal["volume_confirmation"]
+    lookback_candles: Literal[20, 60, 240] = 60
+
+
+AnalysisToolRequest = Annotated[
+    Union[
+        MultiTimeframeTrendRequest,
+        DonchianBreakoutRequest,
+        DrawdownProfileRequest,
+        VolumeConfirmationRequest,
+    ],
+    Field(discriminator="tool"),
+]
+
+
+class AnalysisPlan(StrictToolContract):
+    """Bounded requests selected by the LLM; execution remains deterministic."""
+
+    requests: list[AnalysisToolRequest] = Field(default_factory=list, max_length=3)
+    rationale: str = Field(default="", max_length=240)
+
+    @field_validator("requests")
+    @classmethod
+    def reject_duplicate_tools(cls, value: list[AnalysisToolRequest]):
+        names = [request.tool for request in value]
+        if len(names) != len(set(names)):
+            raise ValueError("analysis plan cannot request the same tool twice")
+        return value
+
+
+class AnalysisToolResult(StrictToolContract):
+    tool: Literal[
+        "multi_timeframe_trend",
+        "donchian_breakout",
+        "drawdown_profile",
+        "volume_confirmation",
+    ]
+    status: Literal["OK", "INSUFFICIENT_DATA", "ERROR"]
+    as_of_timestamp: int
+    data: dict = Field(default_factory=dict)
+    error_code: str | None = Field(default=None, max_length=80)
+    latency_ms: float = Field(ge=0)
+    audit_persisted: bool | None = None
