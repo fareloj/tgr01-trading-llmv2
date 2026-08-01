@@ -17,6 +17,7 @@ if str(PROJECT_DIR) not in sys.path:
 from backend.core import database
 from backend.core.db_models import klines
 from backend.ml.dataset import DatasetConfig, build_market_dataset, dataset_metadata, select_columns_for_export
+from backend.ml.chunked import build_dataset_from_chunks
 
 
 LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
@@ -62,6 +63,7 @@ def main() -> int:
     parser.add_argument("--timeframe", default="1m")
     parser.add_argument("--from-local")
     parser.add_argument("--to-local")
+    parser.add_argument("--chunks-dir", help="Build incrementally from download_mb_history.py chunk files.")
     parser.add_argument("--horizons", default="15,60")
     parser.add_argument("--primary-horizon", type=int, default=15)
     parser.add_argument("--round-trip-cost-pct", type=float, default=0.15)
@@ -70,9 +72,12 @@ def main() -> int:
     parser.add_argument("--max-fill-gap-minutes", type=int, default=15)
     parser.add_argument("--minimum-observed-coverage", type=float, default=0.80)
     parser.add_argument("--allow-synthetic-future", action="store_true")
+    parser.add_argument("--progress-every", type=int, default=10)
     parser.add_argument("--csv-out", default=str(REPORTS_DIR / "last_ml_dataset.csv"))
     parser.add_argument("--metadata-out", default=str(REPORTS_DIR / "last_ml_dataset_metadata.json"))
     args = parser.parse_args()
+    if args.progress_every <= 0:
+        parser.error("--progress-every must be positive")
 
     horizons = parse_horizons(args.horizons)
     config = DatasetConfig(
@@ -85,6 +90,23 @@ def main() -> int:
         minimum_observed_coverage=args.minimum_observed_coverage,
         require_observed_future=not args.allow_synthetic_future,
     )
+    if args.chunks_dir:
+        summary = build_dataset_from_chunks(
+            Path(args.chunks_dir),
+            Path(args.csv_out),
+            config=config,
+            metadata_path=Path(args.metadata_out),
+            progress=lambda index, total, path, rows: (
+                print(f"[{index}/{total}] {path.name}: {rows} eligible rows", flush=True)
+                if index == 1 or index == total or index % args.progress_every == 0
+                else None
+            ),
+        )
+        print(f"Eligible dataset rows: {summary['rows']}")
+        print(f"Labels: {summary['label_distribution']}")
+        print(f"CSV: {summary['output_path']}")
+        print(f"Metadata: {Path(args.metadata_out).resolve()}")
+        return 0
     candles = fetch_candles(
         args.asset,
         args.timeframe,

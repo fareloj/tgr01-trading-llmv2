@@ -114,11 +114,59 @@ A large Transformer is not justified by the current sample size. Model
 selection must use validation only. The untouched test split is evaluated once
 after all feature, threshold, and hyperparameter choices are frozen.
 
+## Global BTC Pretraining
+
+Mercado Bitcoin currently retains BTC/BRL one-minute candles from 2023-03-31,
+which is useful for exchange-specific calibration but does not cover enough
+global BTC regimes by itself. A later pretraining stage may use the official
+Binance BTCUSDT one-minute archive from 2017 onward. Binance publishes monthly
+and daily archives with checksums.
+
+Global and local data must not be concatenated as if they came from one market.
+The planned design is:
+
+1. normalize inputs as returns, volatility, volume ratios, and relative
+   distances instead of absolute USD/USDT/BRL prices;
+2. retain exchange and quote-currency domain identifiers;
+3. pretrain a compact temporal encoder on global BTCUSDT regimes;
+4. fine-tune and calibrate on BTC/BRL Mercado Bitcoin data;
+5. predict return distributions and uncertainty at 15/60/240 minutes;
+6. translate distributions into candidate actions only after local fees,
+   slippage, position state, and deterministic risk gates.
+
+The first neural candidate should be a compact temporal convolutional network
+(TCN), not a large Transformer. It must beat logistic regression and gradient
+boosting in walk-forward validation before being connected to paper trading.
+Random train/test splits, absolute-price targets, and direct model-controlled
+order sizing remain prohibited.
+
+## Full Mercado Bitcoin Snapshot
+
+The resumable download completed on 2026-08-01 with:
+
+- `1,342,682` raw BTC/BRL one-minute candles;
+- `175` independently validated seven-day chunks;
+- `819,594` eligible causal examples after continuity and coverage filters;
+- labels: `145,527 BUY`, `531,577 HOLD`, and `142,490 SELL`;
+- chronological partitions with a 60-minute purge between them.
+
+The readiness gate passed, but the deterministic baselines exposed the main
+training risk. Momentum, trend confirmation, and RSI mean reversion all lost
+approximately all simulated capital because they traded too frequently for the
+configured round-trip cost. Always-HOLD preserved capital. Neural-model success
+must therefore be measured against after-cost return, drawdown, turnover, and
+calibration, not raw classification accuracy alone.
+
+The network should output multi-horizon return distributions and uncertainty.
+Entry policy remains deterministic and must require a net edge after costs,
+signal persistence, cooldown, portfolio limits, and fresh market data.
+
 ## Commands
 
 ```powershell
 py -3.11 .\backend\tests\build_ml_dataset.py
 py -3.11 .\backend\tests\evaluate_ml_baselines.py
+py -3.11 .\backend\tests\download_mb_history.py
 ```
 
 Generated CSV, JSON, and Markdown reports are written to `backend/reports`,

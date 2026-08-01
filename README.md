@@ -31,7 +31,8 @@ scenario.
 The [deterministic tool protocol report](LLM_TOOL_RED_TEAM_REPORT_2026-08-01.md)
 adds bounded LLM-requested analysis tools, objective market-event memory, and
 historical model/prompt benchmarks. The expanded suite records `141` passing
-Python tests. This layer remains opt-in and paper-only.
+Python tests. The history and causal-ML pipeline expands that coverage to `148`
+passing Python tests. This layer remains opt-in and paper-only.
 
 ## Interfaces
 
@@ -321,19 +322,38 @@ py -3.11 .\backend\tests\build_ml_dataset.py
 py -3.11 .\backend\tests\evaluate_ml_baselines.py
 ```
 
+Mercado Bitcoin exposes candles as JSON rather than CSV. The bulk downloader
+discovers the first one-minute candle actually retained by the API, downloads
+the complete range in rate-limited seven-day chunks, validates every response,
+resumes valid chunks after interruption, and performs a streaming CSV merge:
+
+```powershell
+py -3.11 .\backend\tests\download_mb_history.py
+
+py -3.11 .\backend\tests\build_ml_dataset.py `
+  --chunks-dir .\backend\data_exports\mercado_bitcoin_btc_brl_1m\chunks
+```
+
+Raw exports and generated datasets stay under ignored runtime directories and
+are never committed. The current API retains BTC/BRL one-minute candles from
+2023-03-31 onward even though daily candles exist from 2013.
+
 The evaluator uses chronological train/validation/test partitions and purges
 the tail of earlier partitions so labels cannot cross a split boundary. It also
 prevents overlapping fixed-horizon trades from being counted as independent
 profits. Four deterministic references are reported: always-HOLD, 60-minute
 momentum, EMA/MACD confirmation, and RSI mean reversion.
 
-The current local snapshot is not ready for learned-model experiments: it has
-`2,203` eligible rows across `8` calendar days. All action-taking baselines were
-negative after the configured cost in validation and test. The conservative
-gate requires at least `30,000` rows, `30` days, `1,000` rows per action label,
-and `80%` mean observed coverage before training code should be introduced.
-These are engineering safeguards, not a claim that passing them creates an
-edge. See [ml_dataset_and_training_plan.md](ml_dataset_and_training_plan.md).
+The complete local download produced `1,342,682` raw candles and `819,594`
+eligible causal rows (`145,527 BUY`, `531,577 HOLD`, `142,490 SELL`). This is
+enough to begin compact learned-model experiments, but it is not evidence of a
+tradable edge. On the untouched chronological test partition, every current
+action-taking deterministic baseline lost approximately all simulated capital
+after repeated round-trip costs; always-HOLD preserved capital. A learned model
+must therefore predict return distributions and uncertainty, abstain often,
+and pass persistence, cooldown, cost, and deterministic risk gates before an
+action is simulated. See
+[ml_dataset_and_training_plan.md](ml_dataset_and_training_plan.md).
 
 ## Reproducing The Latest Red Team
 
@@ -461,8 +481,8 @@ python -m pytest -q
 The suite covers indicator edge cases, stale/missing data, contract failures,
 capital invariants, transaction rollback, concurrent access, database isolation,
 RAG boundaries, prompt-injection filtering, and operational command allowlists.
-The final validation for this revision completed 104 Python tests and the Vite
-production build successfully.
+The final validation for this revision completed 148 Python tests, 6 Node tests,
+and the Vite production build successfully.
 
 ## Desktop Console
 

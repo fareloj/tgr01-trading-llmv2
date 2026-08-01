@@ -28,6 +28,7 @@ backend/trading_v2.db
 backend/backups/
 backend/logs/
 backend/reports/
+backend/data_exports/
 
 # OS/editor
 .DS_Store
