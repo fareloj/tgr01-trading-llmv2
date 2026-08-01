@@ -8,6 +8,7 @@ from backend.ml.dataset import (
     DatasetConfig,
     FEATURE_COLUMNS,
     build_market_dataset,
+    build_market_sequence_dataset,
     chronological_split,
     select_labeled_horizon,
 )
@@ -69,6 +70,18 @@ def test_short_gaps_are_explicitly_filled_but_not_emitted_as_decisions():
 
     assert missing_timestamp not in set(dataset["timestamp"])
     assert dataset["observed_coverage_240"].min() < 1.0
+
+
+def test_sequence_dataset_retains_synthetic_context_but_marks_it_unobserved():
+    source = candles()
+    missing_timestamp = int(source.iloc[500]["timestamp"])
+    source = source.loc[source["timestamp"] != missing_timestamp].reset_index(drop=True)
+
+    dataset = build_market_sequence_dataset(source)
+    synthetic = dataset.loc[dataset["timestamp"] == missing_timestamp]
+
+    assert len(synthetic) == 1
+    assert bool(synthetic.iloc[0]["is_observed"]) is False
 
 
 def test_large_gaps_start_new_segments_and_require_fresh_history():

@@ -1,0 +1,195 @@
+from __future__ import annotations
+
+import numpy as np
+import torch
+
+from backend.ml.dataset import FEATURE_COLUMNS
+from backend.ml.sequences import (
+    ArrayMarketData,
+    DeviceMarketData,
+    DeviceSequenceBatcher,
+    MarketSequenceDataset,
+    RobustFeatureScaler,
+    chronological_ranges,
+    continuous_end_indices,
+    derive_continuous_segments,
+    observed_target_indices,
+)
+from backend.ml.tcn import CausalConv1d, QuantileTCN, TCNConfig, quantile_loss
+from backend.ml.training import predict_quantiles
+
+
+def test_continuous_indices_reject_gaps_and_segment_boundaries():
+    timestamps = np.arange(20, dtype=np.int64) * 60 + 1_800_000_000
+    timestamps[10:] += 60
+    segments = np.zeros(20, dtype=np.int64)
+    segments[15:] = 1
+
+    indices = continuous_end_indices(
+        timestamps,
+        segments,
+        start=0,
+        end=20,
+        sequence_length=5,
+        stride=1,
+    )
+
+    assert set(indices) == {4, 5, 6, 7, 8, 9, 14, 19}
+
+
+def test_array_market_data_allows_missing_targets_at_segment_tail():
+    rows = 300
+    targets = np.zeros((rows, 2), dtype=np.float32)
+    targets[-60:, 1] = np.nan
+
+    data = ArrayMarketData(
+        timestamps=np.arange(rows, dtype=np.int64) * 60 + 1_800_000_000,
+        segment_ids=np.zeros(rows, dtype=np.int64),
+        is_observed=np.ones(rows, dtype=bool),
+        features=np.zeros((rows, len(FEATURE_COLUMNS)), dtype=np.float32),
+        targets=targets,
+        horizons_minutes=(15, 60),
+    )
+
+    assert np.isnan(data.targets[-1, 1])
+
+
+def test_only_observed_rows_with_complete_targets_become_endpoints():
+    rows = 300
+    observed = np.ones(rows, dtype=bool)
+    observed[250] = False
+    targets = np.zeros((rows, 2), dtype=np.float32)
+    targets[251, 1] = np.nan
+    data = ArrayMarketData(
+        timestamps=np.arange(rows, dtype=np.int64) * 60 + 1_800_000_000,
+        segment_ids=np.zeros(rows, dtype=np.int64),
+        is_observed=observed,
+        features=np.zeros((rows, len(FEATURE_COLUMNS)), dtype=np.float32),
+        targets=targets,
+        horizons_minutes=(15, 60),
+    )
+
+    eligible = observed_target_indices(data, np.array([249, 250, 251, 252]))
+
+    assert eligible.tolist() == [249, 252]
+
+
+def test_continuous_segments_ignore_chunk_local_ids_and_follow_time_only():
+    timestamps = np.arange(12, dtype=np.int64) * 60 + 1_800_000_000
+    timestamps[8:] += 120
+
+    segments = derive_continuous_segments(timestamps)
+
+    assert segments[:8].tolist() == [0] * 8
+    assert segments[8:].tolist() == [1] * 4
+
+
+def test_temporal_ranges_purge_targets_before_boundaries():
+    timestamps = np.arange(1_000, dtype=np.int64) * 60 + 1_800_000_000
+    ranges = chronological_ranges(timestamps, purge_minutes=60)
+
+    validation_start = timestamps[ranges.validation[0]]
+    test_start = timestamps[ranges.test[0]]
+    assert timestamps[ranges.train[1] - 1] + 60 * 60 < validation_start
+    assert timestamps[ranges.validation[1] - 1] + 60 * 60 < test_start
+
+
+def test_scaler_is_unchanged_by_validation_outlier():
+    train = np.arange(500 * len(FEATURE_COLUMNS), dtype=np.float32).reshape(500, -1)
+    scaler = RobustFeatureScaler.fit(train)
+    validation = train.copy()
+    validation[-1] = 1e20
+
+    unchanged = RobustFeatureScaler.fit(train)
+
+    np.testing.assert_array_equal(scaler.median, unchanged.median)
+    np.testing.assert_array_equal(scaler.scale, unchanged.scale)
+    assert np.max(scaler.transform(validation)) <= scaler.clip_value
+
+
+def test_causal_convolution_ignores_future_values():
+    torch.manual_seed(7)
+    layer = CausalConv1d(2, 3, kernel_size=3, padding=4, dilation=2)
+    original = torch.randn(1, 2, 20)
+    changed = original.clone()
+    changed[..., 11:] += 1000
+
+    before = layer(original)
+    after = layer(changed)
+
+    torch.testing.assert_close(before[..., :11], after[..., :11])
+
+
+def test_tcn_covers_sequence_and_returns_quantiles():
+    config = TCNConfig(input_channels=len(FEATURE_COLUMNS), channels=8, levels=6)
+    model = QuantileTCN(config)
+    output = model(torch.randn(4, len(FEATURE_COLUMNS), 240))
+
+    assert config.receptive_field >= 240
+    assert output.shape == (4, 2, 3)
+
+
+def test_quantile_loss_penalizes_crossed_outputs():
+    targets = torch.zeros(2, 2)
+    ordered = torch.tensor([[[-1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]]] * 2)
+    crossed = ordered.flip(-1)
+
+    assert quantile_loss(crossed, targets) > quantile_loss(ordered, targets)
+
+
+def test_device_batcher_matches_host_dataset_when_cuda_is_available():
+    if not torch.cuda.is_available():
+        return
+    rows = 300
+    data = ArrayMarketData(
+        timestamps=np.arange(rows, dtype=np.int64) * 60 + 1_800_000_000,
+        segment_ids=np.zeros(rows, dtype=np.int64),
+        is_observed=np.ones(rows, dtype=bool),
+        features=np.arange(rows * len(FEATURE_COLUMNS), dtype=np.float32).reshape(rows, -1),
+        targets=np.arange(rows * 2, dtype=np.float32).reshape(rows, 2),
+        horizons_minutes=(15, 60),
+    )
+    indices = np.array([239, 240, 299], dtype=np.int64)
+    host = MarketSequenceDataset(data, indices, sequence_length=240)
+    batcher = DeviceSequenceBatcher(
+        DeviceMarketData.from_arrays(data, torch.device("cuda")),
+        indices,
+        sequence_length=240,
+        batch_size=3,
+        shuffle=False,
+    )
+
+    device_features, device_targets = next(iter(batcher))
+    host_features = torch.stack([host[index][0] for index in range(len(host))])
+    host_targets = torch.stack([host[index][1] for index in range(len(host))])
+
+    torch.testing.assert_close(device_features.cpu(), host_features)
+    torch.testing.assert_close(device_targets.cpu(), host_targets)
+
+
+def test_prediction_collects_device_resident_targets_on_cpu():
+    if not torch.cuda.is_available():
+        return
+    rows = 250
+    data = ArrayMarketData(
+        timestamps=np.arange(rows, dtype=np.int64) * 60 + 1_800_000_000,
+        segment_ids=np.zeros(rows, dtype=np.int64),
+        is_observed=np.ones(rows, dtype=bool),
+        features=np.zeros((rows, len(FEATURE_COLUMNS)), dtype=np.float32),
+        targets=np.zeros((rows, 2), dtype=np.float32),
+        horizons_minutes=(15, 60),
+    )
+    indices = np.array([239, 240], dtype=np.int64)
+    batcher = DeviceSequenceBatcher(
+        DeviceMarketData.from_arrays(data, torch.device("cuda")),
+        indices,
+        sequence_length=240,
+        batch_size=2,
+        shuffle=False,
+    )
+    model = QuantileTCN(TCNConfig(input_channels=len(FEATURE_COLUMNS), channels=8)).cuda()
+
+    predictions, targets = predict_quantiles(model, batcher, device=torch.device("cuda"))
+
+    assert predictions.shape == (2, 2, 3)
+    assert targets.shape == (2, 2)

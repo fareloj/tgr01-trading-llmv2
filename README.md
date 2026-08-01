@@ -347,6 +347,7 @@ contract, and kept separate from the Mercado Bitcoin calibration domain:
 py -3.11 .\backend\tests\download_binance_history.py
 
 py -3.11 .\backend\tests\build_multidomain_ml_dataset.py
+py -3.11 .\backend\tests\build_tcn_sequence_dataset.py
 ```
 
 The verified local snapshot contains `4,656,799` BTCUSDT candles from August
@@ -360,6 +361,35 @@ The neural research environment uses the official `torch 2.12.1+cu130` wheel.
 CUDA execution was verified on the local RTX 3060 with a real tensor operation;
 model checkpoints must record the exact Torch, CUDA, feature-schema, dataset,
 and split versions before they can be compared.
+
+The first neural candidate is a Temporal Convolutional Network (TCN). It reads
+240 consecutive one-minute feature rows through causal dilated convolutions;
+no layer can inspect a future candle. Instead of directly predicting an order,
+it estimates the 10th, 50th, and 90th percentiles of the 15/60-minute future
+return. Python derives a candidate only when the complete uncertainty interval
+clears estimated costs and the minimum edge.
+
+```powershell
+py -3.11 .\backend\tests\train_tcn.py --device cuda
+
+# Explicitly open the untouched local test partition only after freezing the run
+py -3.11 .\backend\tests\train_tcn.py --device cuda --evaluate-test
+```
+
+Global BTCUSDT pretraining and BTC/BRL fine-tuning use independent chronological
+splits. The scaler is fitted on global training data only, sequence windows
+cannot cross a long outage, and checkpoints contain dataset SHA-256,
+split ranges, scaler state, feature schema, random seed, runtime versions, and
+training history. CUDA training keeps the feature matrix resident on the GPU
+and assembles windows there; `--host-loader` remains available as a low-memory
+fallback.
+
+BTC/BRL sequence context keeps short-gap zero-volume candles with
+`is_observed=false`, so every convolution step still represents exactly one
+minute. Synthetic rows can provide context but can never become a training or
+execution endpoint; endpoints and their future targets must both be observed.
+The current sequence export contains `969,131` context rows and yields `75,373`
+training, `27,543` validation, and `23,247` test endpoints at stride five.
 
 The evaluator uses chronological train/validation/test partitions and purges
 the tail of earlier partitions so labels cannot cross a split boundary. It also
@@ -377,6 +407,16 @@ must therefore predict return distributions and uncertainty, abstain often,
 and pass persistence, cooldown, cost, and deterministic risk gates before an
 action is simulated. See
 [ml_dataset_and_training_plan.md](ml_dataset_and_training_plan.md).
+
+The first fixed TCN experiment did not pass that utility boundary. On `23,247`
+local test sequences, median-direction accuracy was `54.27%` at 15 minutes and
+`54.58%` at 60 minutes. The nominal 10th-to-90th percentile intervals covered
+`79.15%` and `79.77%` of outcomes. MAE improved over a zero-return forecast by
+only about `0.61%` at 15m and `0.85%` at 60m; 60m RMSE was slightly worse than
+zero-return. No 15-minute interval cleared the configured `0.20%`
+actionable move, so the deterministic policy abstained on every evaluated row.
+The checkpoint remains offline research evidence and is not connected to the
+LLM, paper simulator, or execution pipeline.
 
 ## Reproducing The Latest Red Team
 
@@ -504,7 +544,7 @@ python -m pytest -q
 The suite covers indicator edge cases, stale/missing data, contract failures,
 capital invariants, transaction rollback, concurrent access, database isolation,
 RAG boundaries, prompt-injection filtering, and operational command allowlists.
-The final validation for this revision completed 158 Python tests, 6 Node tests,
+The final validation for this revision completed 170 Python tests, 6 Node tests,
 and the Vite production build successfully.
 
 ## Desktop Console

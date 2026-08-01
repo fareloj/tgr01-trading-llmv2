@@ -9,7 +9,12 @@ from typing import Callable
 
 import pandas as pd
 
-from backend.ml.dataset import DatasetConfig, build_market_dataset, select_columns_for_export
+from backend.ml.dataset import (
+    DatasetConfig,
+    build_market_dataset,
+    build_market_sequence_dataset,
+    select_columns_for_export,
+)
 
 
 ProgressCallback = Callable[[int, int, Path, int], None]
@@ -55,6 +60,7 @@ def build_dataset_from_chunks(
     metadata_path: Path | None = None,
     progress: ProgressCallback | None = None,
     domain_metadata: dict[str, str] | None = None,
+    include_context_rows: bool = False,
 ) -> dict:
     config = config or DatasetConfig()
     files = list_chunk_files(chunks_dir)
@@ -73,7 +79,8 @@ def build_dataset_from_chunks(
             context_paths = _context_files(files, index, config)
             frames = [pd.read_csv(path, usecols=CANDLE_COLUMNS) for path in context_paths]
             source = pd.concat(frames, ignore_index=True)
-            dataset = build_market_dataset(source, config)
+            builder = build_market_sequence_dataset if include_context_rows else build_market_dataset
+            dataset = builder(source, config)
             current_start, current_end = chunk_window_from_path(current)
             dataset = dataset.loc[dataset["timestamp"].between(current_start, current_end)].copy()
             exported = select_columns_for_export(dataset, config.horizons_minutes)
@@ -91,7 +98,7 @@ def build_dataset_from_chunks(
                 )
                 header_written = True
                 total_rows += len(exported)
-                label_counts.update(str(label) for label in exported["label"])
+                label_counts.update(str(label) for label in exported["label"].dropna())
                 first_timestamp = (
                     int(exported["timestamp"].min()) if first_timestamp is None else first_timestamp
                 )
@@ -115,6 +122,7 @@ def build_dataset_from_chunks(
         "last_timestamp": last_timestamp,
         "label_distribution": dict(label_counts),
         "domain_metadata": dict(domain_metadata or {}),
+        "include_context_rows": include_context_rows,
         "config": config.as_dict(),
     }
     if metadata_path:

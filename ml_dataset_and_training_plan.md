@@ -180,6 +180,48 @@ The network should output multi-horizon return distributions and uncertainty.
 Entry policy remains deterministic and must require a net edge after costs,
 signal persistence, cooldown, portfolio limits, and fresh market data.
 
+## First TCN Experiment
+
+TCN means Temporal Convolutional Network. The implementation uses six causal
+dilated residual levels with a receptive field of 253 candles and receives a
+240-candle window. Its outputs are return quantiles `p10`, `p50`, and `p90` for
+15 and 60 minutes. Quantile regression was selected instead of direct action
+classification because BUY/HOLD/SELL labels depend on exchange costs and policy
+thresholds rather than being an intrinsic property of a candle.
+
+The fixed experiment used three global epochs followed by three BTC/BRL epochs.
+Checkpoint selection used validation loss only. The BTC/BRL test partition was
+opened only after local fitting completed. Results were:
+
+- 15-minute median direction accuracy: `54.27%`;
+- 60-minute median direction accuracy: `54.58%`;
+- p10-p90 empirical coverage: `79.15%` at 15m and `79.77%` at 60m;
+- MAE: `0.1875%` at 15m and `0.3518%` at 60m;
+- relative MAE improvement over zero-return: only `0.61%` and `0.85%`;
+- deterministic 15-minute candidates after cost and uncertainty: zero.
+
+This is a technically valid but commercially inconclusive result. It does not
+beat the operational boundary because it has not demonstrated an actionable
+post-cost edge. The model remains disconnected from paper and live execution.
+
+Training initially assembled every sequence through Python/NumPy on the host.
+The optimized path stores the feature and target matrices on CUDA and constructs
+whole batches directly on the GPU. On the RTX 3060, a full global epoch fell
+from approximately `23.0s` to `15.5s` with batch 1024. Batch 2048 reached
+`13.2s`, but performs fewer optimizer updates per epoch, so 1024 remains the
+default quality/throughput compromise. The CPU loader remains an explicit
+fallback for systems with less VRAM.
+
+The first pass also exposed that decision-row CSVs omit synthetic context
+candles. Requiring 240 consecutive exported rows therefore discarded most
+BTC/BRL windows. A dedicated sequence export now retains minute-regularized
+context with `is_observed=false`; only observed endpoints with observed future
+targets may enter the loss. This preserves real elapsed time without turning
+filled candles into decisions.
+The dedicated export contains `969,131` context rows. With stride five it
+produces `75,373` training, `27,543` validation, and `23,247` test endpoints,
+instead of the preliminary decision-row export's `15,592/6,144/1,099`.
+
 ## Commands
 
 ```powershell
@@ -188,6 +230,8 @@ py -3.11 .\backend\tests\evaluate_ml_baselines.py
 py -3.11 .\backend\tests\download_mb_history.py
 py -3.11 .\backend\tests\download_binance_history.py
 py -3.11 .\backend\tests\build_multidomain_ml_dataset.py
+py -3.11 .\backend\tests\build_tcn_sequence_dataset.py
+py -3.11 .\backend\tests\train_tcn.py --device cuda
 ```
 
 Generated CSV, JSON, and Markdown reports are written to `backend/reports`,

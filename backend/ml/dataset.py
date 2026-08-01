@@ -232,17 +232,9 @@ def _assign_future_labels(frame: pd.DataFrame, config: DatasetConfig) -> pd.Data
     return result
 
 
-def build_market_dataset(candles: pd.DataFrame, config: DatasetConfig | None = None) -> pd.DataFrame:
-    """Build a causal feature/label table from closed candles.
-
-    Features at timestamp ``t`` use only candles at or before ``t``. Future
-    labels require an exact candle at ``t + horizon``; gaps are never bridged.
-    """
-
-    config = config or DatasetConfig()
+def _build_featured_market_table(candles: pd.DataFrame, config: DatasetConfig) -> pd.DataFrame:
     frame = _validate_candles(candles)
     frame = _regularize_candles(frame, config)
-
     featured = pd.concat(
         [_segment_features(segment) for _, segment in frame.groupby("segment_id", sort=False)],
         ignore_index=True,
@@ -254,12 +246,45 @@ def build_market_dataset(candles: pd.DataFrame, config: DatasetConfig | None = N
 
     segment_position = featured.groupby("segment_id").cumcount() + 1
     featured["history_candles"] = segment_position
+    return featured
+
+
+def build_market_dataset(candles: pd.DataFrame, config: DatasetConfig | None = None) -> pd.DataFrame:
+    """Build a causal decision-row table from closed candles.
+
+    Features at timestamp ``t`` use only candles at or before ``t``. Future
+    labels require an exact candle at ``t + horizon``; gaps are never bridged.
+    Both the decision candle and future candle must be observed.
+    """
+
+    config = config or DatasetConfig()
+    featured = _build_featured_market_table(candles, config)
     required = list(FEATURE_COLUMNS) + ["label"]
     result = featured.loc[
         (featured["history_candles"] >= config.minimum_history_candles)
         & featured["is_observed"]
         & (featured["observed_coverage_240"] >= config.minimum_observed_coverage)
         & featured[required].notna().all(axis=1)
+    ].copy()
+    return result.sort_values("timestamp").reset_index(drop=True)
+
+
+def build_market_sequence_dataset(
+    candles: pd.DataFrame,
+    config: DatasetConfig | None = None,
+) -> pd.DataFrame:
+    """Build minute-regular context rows for sequence models.
+
+    Synthetic short-gap rows remain explicitly marked context. Consumers must
+    still require observed decision rows and observed future targets.
+    """
+
+    config = config or DatasetConfig()
+    featured = _build_featured_market_table(candles, config)
+    result = featured.loc[
+        (featured["history_candles"] >= config.minimum_history_candles)
+        & (featured["observed_coverage_240"] >= config.minimum_observed_coverage)
+        & featured[list(FEATURE_COLUMNS)].notna().all(axis=1)
     ].copy()
     return result.sort_values("timestamp").reset_index(drop=True)
 
