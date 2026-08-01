@@ -71,6 +71,16 @@ def setup_test_database():
     test_engine = create_engine(_TEST_URL, pool_pre_ping=True)
     original_engine = database.engine
 
+    # Serializa suites que apontem para o mesmo banco. Sem este lock, duas
+    # execucoes locais podem disputar DROP/CREATE e produzir falsos deadlocks.
+    lock_connection = test_engine.connect()
+    lock_key = f"tgr01-pytest:{test_database}"
+    lock_connection.execute(
+        text("SELECT pg_advisory_lock(hashtext(:lock_key))"),
+        {"lock_key": lock_key},
+    )
+    lock_connection.commit()
+
     # O codigo usa um unico namespace de pacote: backend.core.database.
     database.engine = test_engine
 
@@ -81,6 +91,12 @@ def setup_test_database():
     finally:
         metadata.drop_all(test_engine)
         database.engine = original_engine
+        lock_connection.execute(
+            text("SELECT pg_advisory_unlock(hashtext(:lock_key))"),
+            {"lock_key": lock_key},
+        )
+        lock_connection.commit()
+        lock_connection.close()
         test_engine.dispose()
 
 

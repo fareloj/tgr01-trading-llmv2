@@ -297,6 +297,33 @@ def test_news_risk_detects_negative_red_flag():
     assert "proibicao" in risk["matched_terms"]
 
 
+def test_news_risk_uses_token_boundaries_and_does_not_match_bank_as_ban():
+    risk = build_news_risk(
+        [
+            {
+                "headline": "Bank of Italy finds no consistent cost advantage for remittances",
+                "source": "pytest",
+            }
+        ]
+    )
+
+    assert risk["has_negative_red_flag"] is False
+    assert risk["risk_level"] == "NORMAL"
+    assert risk["matched_terms"] == []
+
+
+def test_news_risk_matches_whole_words_after_accent_normalization():
+    risk = build_news_risk(
+        [
+            {"headline": "Regulador anuncia proibição regional", "source": "pytest"},
+            {"headline": "Pânico cresce após liquidações", "source": "pytest"},
+        ]
+    )
+
+    assert risk["risk_level"] == "HIGH"
+    assert risk["matched_terms"] == ["liquidacoes", "panico", "proibicao", "regulador"]
+
+
 def test_directional_gate_blocks_buy_with_news_red_flag():
     payload = _compatible_payload()
     payload["news_risk"] = {

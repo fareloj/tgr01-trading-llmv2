@@ -40,11 +40,11 @@ class FakeSession:
         return FakeResponse(self.search_payload)
 
 
-def _health(lexical_indexed: int = 10):
+def _health(lexical_indexed: int = 10, dense_indexed: int = 10):
     return {
         "status": "ok",
         "dependencies": {
-            "dense_index": {"ok": True, "body": {"indexed": 10}},
+            "dense_index": {"ok": True, "body": {"indexed": dense_indexed}},
             "lexical_index": {"ok": True, "body": {"indexed": lexical_indexed}},
             "reranker": {"ok": True, "body": {"device": "cuda"}},
         },
@@ -54,10 +54,12 @@ def _health(lexical_indexed: int = 10):
 def test_health_requires_both_indexes_and_reranker():
     ready = ExternalRagClient(session=FakeSession(health=_health())).health()
     degraded = ExternalRagClient(session=FakeSession(health=_health(lexical_indexed=0))).health()
+    mismatched = ExternalRagClient(session=FakeSession(health=_health(lexical_indexed=9))).health()
 
     assert ready["status"] == "ready"
     assert ready["reranker_device"] == "cuda"
     assert degraded["status"] == "degraded"
+    assert mismatched["status"] == "degraded"
 
 
 def test_search_filters_corpus_bounds_input_and_rejects_prompt_injection():
@@ -146,6 +148,24 @@ def test_search_rejects_result_from_another_corpus():
 
     assert result.rejected_results == 1
     assert result.results == ()
+
+
+def test_search_rejects_operational_artifacts_and_secret_paths():
+    session = FakeSession(
+        search={
+            "results": [
+                {"chunk_id": "log", "path": "backend/logs/worker.out.log", "text": "runtime", "security_flags": []},
+                {"chunk_id": "env", "path": "backend/.env", "text": "API_KEY=value", "security_flags": []},
+                {"chunk_id": "key", "path": "certs/client.pem", "text": "certificate", "security_flags": []},
+                {"chunk_id": "safe", "path": "backend/risk/risk_manager.py", "text": "risk", "security_flags": []},
+            ]
+        }
+    )
+
+    result = ExternalRagClient(session=session).search("risk", audit=False)
+
+    assert result.rejected_results == 3
+    assert [item.chunk_id for item in result.results] == ["safe"]
 
 
 def test_external_rag_is_absent_from_trade_approval_path():

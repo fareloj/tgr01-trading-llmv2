@@ -4,11 +4,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from sqlalchemy import select
+
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR.parent))
 
 from backend.core.database import get_connection, get_db_path, init_db, print_db_diagnostics
 from backend.core.clock_sync import check_clock_skew
+from backend.core.db_models import klines, news, system_health
 
 
 def local_date(timestamp: int) -> str:
@@ -20,49 +23,28 @@ def local_datetime(timestamp: int) -> str:
 
 
 def fetch_latest_kline(asset: str, timeframe: str):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT asset, timeframe, timestamp, close
-            FROM klines
-            WHERE asset = ? AND timeframe = ?
-            ORDER BY timestamp DESC
-            LIMIT 1
-            """,
-            (asset, timeframe),
-        )
-        return cursor.fetchone()
-    finally:
-        conn.close()
+    stmt = (
+        select(klines.c.asset, klines.c.timeframe, klines.c.timestamp, klines.c.close)
+        .where(klines.c.asset == asset, klines.c.timeframe == timeframe)
+        .order_by(klines.c.timestamp.desc())
+        .limit(1)
+    )
+    with get_connection() as conn:
+        row = conn.execute(stmt).mappings().first()
+        return dict(row) if row else None
 
 
 def fetch_latest_news():
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT timestamp, headline, source
-            FROM news
-            ORDER BY timestamp DESC
-            LIMIT 1
-            """
-        )
-        return cursor.fetchone()
-    finally:
-        conn.close()
+    stmt = select(news.c.timestamp, news.c.headline, news.c.source).order_by(news.c.timestamp.desc()).limit(1)
+    with get_connection() as conn:
+        row = conn.execute(stmt).mappings().first()
+        return dict(row) if row else None
 
 
 def fetch_worker_health():
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT worker_name, last_heartbeat FROM system_health ORDER BY worker_name")
-        return cursor.fetchall()
-    finally:
-        conn.close()
+    stmt = select(system_health.c.worker_name, system_health.c.last_heartbeat).order_by(system_health.c.worker_name)
+    with get_connection() as conn:
+        return [dict(row) for row in conn.execute(stmt).mappings()]
 
 
 def fail(message: str):

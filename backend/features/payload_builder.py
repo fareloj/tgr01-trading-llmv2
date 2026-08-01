@@ -1,4 +1,6 @@
 import time
+import re
+import unicodedata
 from pathlib import Path
 import sys
 
@@ -79,8 +81,10 @@ def build_news_risk(recent_news: list) -> dict:
 
     for item in recent_news:
         headline = item.get("headline", "")
-        normalized = headline.lower()
-        headline_terms = sorted(term for term in NEGATIVE_NEWS_TERMS if term in normalized)
+        normalized = unicodedata.normalize("NFKD", str(headline).casefold())
+        normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+        tokens = set(re.findall(r"[a-z0-9]+", normalized))
+        headline_terms = sorted(term for term in NEGATIVE_NEWS_TERMS if term in tokens)
         if not headline_terms:
             continue
         matched_terms.update(headline_terms)

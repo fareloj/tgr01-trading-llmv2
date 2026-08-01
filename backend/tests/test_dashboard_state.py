@@ -4,6 +4,8 @@ import time
 from backend.core import database
 from backend.core.db_models import (
     klines,
+    paper_position_reconciliations,
+    paper_position_state,
     rag_chunks,
     rag_documents,
     rag_retrieval_logs,
@@ -36,6 +38,7 @@ def test_dashboard_state_uses_postgresql_defaults(tmp_path, monkeypatch):
     assert state["external_rag"]["status"] == "ready"
     assert state["reports"] == []
     assert state["portfolio"]["equity_brl"] == 10000
+    assert state["position"] is None
 
 
 def test_dashboard_state_counts_rag_and_reports(tmp_path, monkeypatch):
@@ -81,6 +84,32 @@ def test_dashboard_state_counts_rag_and_reports(tmp_path, monkeypatch):
                 volume=1,
             )
         )
+        conn.execute(
+            paper_position_state.insert().values(
+                asset="BTC/BRL",
+                quantity=0.01,
+                avg_cost_brl=90000,
+                realized_pnl_brl=15,
+                updated_at=now,
+            )
+        )
+        conn.execute(
+            paper_position_reconciliations.insert().values(
+                asset="BTC/BRL",
+                timestamp=now,
+                method="legacy_trade_log_replay_v1",
+                initial_brl=10000,
+                initial_btc=0,
+                reconstructed_brl=9000,
+                reconstructed_btc=0.01,
+                observed_brl=9000,
+                observed_btc=0.01,
+                avg_cost_brl=90000,
+                realized_pnl_brl=15,
+                source_log_ids_json="[7]",
+                details_json="{}",
+            )
+        )
 
     reports_dir = tmp_path / "reports"
     reports_dir.mkdir()
@@ -92,3 +121,10 @@ def test_dashboard_state_counts_rag_and_reports(tmp_path, monkeypatch):
 
     assert state["rag"] == {"documents": 1, "chunks": 1, "retrievals": 1}
     assert state["reports"][0]["name"] == "report.json"
+    assert state["position"]["avg_cost_brl"] == 90000
+    assert state["position"]["reconciliation"] == {
+        "id": 1,
+        "timestamp": now,
+        "method": "legacy_trade_log_replay_v1",
+        "source_log_ids": [7],
+    }

@@ -20,6 +20,7 @@ const previewState = {
   },
   clock: { status: "OK", skew_seconds: 0.42, max_skew_seconds: 300 },
   portfolio: { equity_brl: 9840.63, exposure_pct: 18.63 },
+  position: { quantity: 0.00509823, avg_cost_brl: 390888.51, realized_pnl_brl: 0, reconciliation: { method: "legacy_trade_log_replay_v1" } },
   rag: { documents: 67, chunks: 122, retrievals: 1 },
   external_rag: { status: "ready", reachable: true, dense_indexed: 833, lexical_indexed: 833, reranker_device: "cuda" },
   reports: [{ name: "last_entry_decisions.json", size_bytes: 5178 }],
@@ -221,7 +222,7 @@ function App() {
         <MetricCard title="news_worker"><strong><StatusDot tone={healthTone(workers.news_worker?.status)} />{workers.news_worker?.status || "--"}</strong><span>Last heartbeat</span><p>{seconds(workers.news_worker?.age_seconds)} ago</p></MetricCard>
         <MetricCard title="Latest Candle (BTC/BRL 1m)"><h3>{money(state.latest_kline?.close)} <small>BRL</small></h3><span>Age</span><p className="good">{seconds(state.latest_kline?.age_seconds)} ago</p></MetricCard>
         <MetricCard title={`Latest News (${state.latest_news?.source || "--"})`}><p className="headline">{state.latest_news?.headline || "Nenhuma notícia"}</p><span>Age</span><p className="good">{seconds(state.latest_news?.age_seconds)} ago</p></MetricCard>
-        <MetricCard title="Clock Skew"><h3 className={state.clock?.status === "OK" ? "good" : "bad"}>{state.clock?.skew_seconds ?? "--"}s</h3><span>Local vs HTTP</span><p>{state.clock?.status || "--"}</p></MetricCard>
+        <MetricCard title="Paper Position"><h3>{money(state.position?.avg_cost_brl)} <small>BRL avg</small></h3><span>Quantity / provenance</span><p>{Number(state.position?.quantity || 0).toFixed(8)} BTC · {state.position?.reconciliation?.method || "native paper"}</p></MetricCard>
       </section>
 
       <section className="primary-grid">

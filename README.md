@@ -193,10 +193,17 @@ python .\backend\tests\query_external_rag.py --health
 python .\backend\tests\query_external_rag.py "where does RiskManager reject stale market data"
 ```
 
-The validated local deployment indexed 853 chunks in both dense and lexical
+The final validated local deployment indexed 800 chunks in both dense and lexical
 indexes, used the CUDA reranker, recovered after a simulated lexical-index
 failure, and continued to reject hostile retrieved instructions without placing
 the RAG in any trade-approval module.
+
+Maintenance calls such as `/ingest`, `/embed`, and index rebuilds must be
+serialized. A concurrent `/embed` red-team run left the external orchestrator
+handlers pending and required an orchestrator-only restart; paper balances and
+trade logs remained unchanged because this integration is observational and
+fail-open. The trading health check also requires dense/lexical count parity,
+not merely two non-empty indexes.
 
 ## Reports And Evaluation
 
@@ -313,8 +320,19 @@ Inspect the state without changing anything:
 python .\backend\ops\reconcile_paper_position.py
 ```
 
-After manually auditing the intended baseline, preview either an explicit cost
-or a deliberate mark-to-market reset:
+The preferred path deterministically replays legacy approved orders and refuses
+to persist unless the reconstructed BRL and BTC balances match the observed
+portfolio within a strict tolerance:
+
+```powershell
+python .\backend\ops\reconcile_paper_position.py --from-legacy-logs
+python .\backend\ops\reconcile_paper_position.py --from-legacy-logs --confirm
+```
+
+Every successful reconciliation is written to
+`paper_position_reconciliations` with its method, source log IDs, reconstructed
+balances, observed balances, and replay details. Manual cost or a deliberate
+mark-to-market baseline remain exceptional operator-reviewed alternatives:
 
 ```powershell
 python .\backend\ops\reconcile_paper_position.py --avg-cost-brl 350000
@@ -333,7 +351,7 @@ python -m pytest -q
 The suite covers indicator edge cases, stale/missing data, contract failures,
 capital invariants, transaction rollback, concurrent access, database isolation,
 RAG boundaries, prompt-injection filtering, and operational command allowlists.
-The final validation for this revision completed 85 Python tests and the Vite
+The final validation for this revision completed 104 Python tests and the Vite
 production build successfully.
 
 ## Desktop Console

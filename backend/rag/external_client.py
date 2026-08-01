@@ -24,6 +24,18 @@ DEFAULT_CORPUS = "tgr01-trading-llmv2"
 MAX_QUERY_CHARS = 2000
 MAX_RESULT_TEXT_CHARS = 1600
 BLOCKED_SECURITY_FLAGS = {"prompt_injection_suspected", "secret_suspected"}
+BLOCKED_PATH_PREFIXES = (
+    ".agents/",
+    ".git/",
+    "backend/backups/",
+    "backend/logs/",
+    "backend/reports/",
+    "desktop/dist/",
+    "desktop/node_modules/",
+    "node_modules/",
+)
+BLOCKED_PATH_NAMES = {".env", ".env.local", ".env.production"}
+BLOCKED_PATH_SUFFIXES = (".key", ".pem", ".p12", ".pfx")
 PROMPT_INJECTION_PATTERNS = (
     re.compile(r"\bignore\b.{0,80}\b(previous|prior|all|as)\b.{0,80}\b(instruction|instructions|instru)", re.DOTALL),
     re.compile(r"\b(disregard|override)\b.{0,80}\b(instruction|instructions|system|policy)", re.DOTALL),
@@ -35,6 +47,16 @@ def _contains_prompt_injection(text: str) -> bool:
     normalized = unicodedata.normalize("NFKD", str(text)).encode("ascii", "ignore").decode("ascii").lower()
     normalized = " ".join(normalized.split())
     return any(pattern.search(normalized) for pattern in PROMPT_INJECTION_PATTERNS)
+
+
+def _is_blocked_path(path: str) -> bool:
+    normalized = str(path).replace("\\", "/").lstrip("./").lower()
+    name = normalized.rsplit("/", 1)[-1]
+    return (
+        any(normalized.startswith(prefix) for prefix in BLOCKED_PATH_PREFIXES)
+        or name in BLOCKED_PATH_NAMES
+        or name.endswith(BLOCKED_PATH_SUFFIXES)
+    )
 
 
 @dataclass(frozen=True)
@@ -98,7 +120,7 @@ class ExternalRagClient:
                 and lexical.get("ok")
                 and reranker.get("ok")
                 and dense_indexed > 0
-                and lexical_indexed > 0
+                and dense_indexed == lexical_indexed
             )
             return {
                 "status": "ready" if ready else "degraded",
@@ -162,10 +184,12 @@ class ExternalRagClient:
             for item in payload.get("results", []):
                 flags = tuple(str(flag) for flag in item.get("security_flags", []))
                 item_corpus = str(item.get("corpus", "")).strip()
+                item_path = str(item.get("path", ""))
                 item_text = str(item.get("text", ""))
                 if (
                     (item_corpus and item_corpus != self.corpus)
                     or BLOCKED_SECURITY_FLAGS.intersection(flags)
+                    or _is_blocked_path(item_path)
                     or _contains_prompt_injection(item_text)
                 ):
                     rejected += 1
@@ -177,7 +201,7 @@ class ExternalRagClient:
                 hits.append(
                     ExternalRagHit(
                         chunk_id=str(item.get("chunk_id", "")),
-                        path=str(item.get("path", "")),
+                        path=item_path,
                         language=item.get("language"),
                         start_line=item.get("start_line"),
                         end_line=item.get("end_line"),

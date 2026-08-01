@@ -6,7 +6,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from backend.core import database
 from backend.core.db_models import (
     metadata, klines, news, trade_logs, virtual_portfolio,
-    paper_position_state, system_health, rag_documents, rag_chunks, rag_retrieval_logs
+    paper_position_state, paper_position_reconciliations, system_health,
+    rag_documents, rag_chunks, rag_retrieval_logs
 )
 
 class EngineProxy:
@@ -43,10 +44,17 @@ def upsert_kline(kline_dict: Dict[str, Any], connection=None):
     )
     _execute_query(stmt, connection=connection)
 
-def add_klines(klines_list: List[Dict[str, Any]], connection=None):
-    """Upserts multiple klines."""
-    for kline in klines_list:
-        upsert_kline(kline, connection=connection)
+def add_klines(klines_list: List[Dict[str, Any]], connection=None) -> int:
+    """Upserts multiple klines in one transaction and returns the processed count."""
+    if connection is not None:
+        for kline in klines_list:
+            upsert_kline(kline, connection=connection)
+        return len(klines_list)
+
+    with engine.begin() as conn:
+        for kline in klines_list:
+            upsert_kline(kline, connection=conn)
+    return len(klines_list)
 
 def get_klines(asset: str, timeframe: str, limit: int, as_of_timestamp: Optional[int] = None, connection=None) -> List[Dict[str, Any]]:
     """Retrieves recent klines ordered by timestamp descending."""
@@ -221,6 +229,23 @@ def update_paper_position_state(asset: str, quantity: float, avg_cost_brl: float
     )
     _execute_query(stmt, connection=connection)
 
+
+def add_paper_position_reconciliation(data: Dict[str, Any], *, connection) -> int:
+    stmt = insert(paper_position_reconciliations).values(**data)
+    result = _execute_query(stmt, connection=connection)
+    return int(result.inserted_primary_key[0]) if result.inserted_primary_key else 0
+
+
+def get_latest_paper_position_reconciliation(asset: str, connection=None) -> Optional[Dict[str, Any]]:
+    stmt = (
+        select(paper_position_reconciliations)
+        .where(paper_position_reconciliations.c.asset == asset)
+        .order_by(paper_position_reconciliations.c.timestamp.desc(), paper_position_reconciliations.c.id.desc())
+        .limit(1)
+    )
+    result = _execute_query(stmt, connection=connection).first()
+    return dict(result._mapping) if result else None
+
 def update_system_health(worker_name: str, last_heartbeat: int, connection=None):
     """Upserts the heartbeat timestamp for a worker."""
     stmt = pg_insert(system_health).values(
@@ -243,7 +268,7 @@ def clear_all_tables(connection=None):
     """Truncates or deletes all database tables."""
     tables_to_clear = [
         'klines', 'news', 'trade_logs', 'virtual_portfolio',
-        'paper_position_state', 'system_health',
+        'paper_position_state', 'paper_position_reconciliations', 'system_health',
         'rag_documents', 'rag_chunks', 'rag_retrieval_logs'
     ]
 

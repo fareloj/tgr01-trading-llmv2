@@ -93,6 +93,7 @@ def test_init_db_migrates_execution_audit_columns():
     columns = [col["name"] for col in inspector.get_columns("trade_logs")]
 
     assert "paper_position_state" in tables
+    assert "paper_position_reconciliations" in tables
     assert "effective_price" in columns
     assert "fee_brl" in columns
     assert "realized_pnl_brl" in columns

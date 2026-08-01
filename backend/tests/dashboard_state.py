@@ -16,6 +16,8 @@ from backend.core import database
 from backend.core.db_models import (
     klines,
     news,
+    paper_position_reconciliations,
+    paper_position_state,
     rag_chunks,
     rag_documents,
     rag_retrieval_logs,
@@ -89,6 +91,18 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
                 select(virtual_portfolio.c.currency, virtual_portfolio.c.amount)
             )
         }
+        position_row = conn.execute(
+            select(paper_position_state).where(paper_position_state.c.asset == "BTC/BRL")
+        ).mappings().first()
+        reconciliation_row = conn.execute(
+            select(paper_position_reconciliations)
+            .where(paper_position_reconciliations.c.asset == "BTC/BRL")
+            .order_by(
+                paper_position_reconciliations.c.timestamp.desc(),
+                paper_position_reconciliations.c.id.desc(),
+            )
+            .limit(1)
+        ).mappings().first()
         rag = {
             "documents": int(conn.scalar(select(func.count()).select_from(rag_documents)) or 0),
             "chunks": int(conn.scalar(select(func.count()).select_from(rag_chunks)) or 0),
@@ -121,6 +135,17 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
     if isinstance(entry_evaluation, dict):
         entry_evaluation["db_path"] = database.get_database_label()
 
+    position = dict(position_row) if position_row else None
+    if position is not None:
+        position["reconciliation"] = None
+        if reconciliation_row:
+            position["reconciliation"] = {
+                "id": int(reconciliation_row["id"]),
+                "timestamp": int(reconciliation_row["timestamp"]),
+                "method": reconciliation_row["method"],
+                "source_log_ids": json.loads(reconciliation_row["source_log_ids_json"]),
+            }
+
     return {
         "generated_at": now,
         "db_path": database.get_database_label(),
@@ -144,6 +169,7 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
             "equity_brl": round(equity, 2),
             "exposure_pct": round(exposure, 2),
         },
+        "position": position,
         "rag": rag,
         "external_rag": get_external_rag_health(),
         "reports": reports,

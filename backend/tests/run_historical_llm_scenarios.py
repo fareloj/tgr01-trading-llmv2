@@ -5,12 +5,15 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
+
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPORTS_DIR = BACKEND_DIR / "reports"
 sys.path.insert(0, str(BACKEND_DIR.parent))
 
 from backend.agents.decision_agent import DecisionAgent, has_llm_api_key
 from backend.core.database import get_connection
+from backend.core.db_models import klines
 from backend.features.payload_builder import build_agent_payload
 from backend.risk.risk_manager import RiskManager
 
@@ -35,20 +38,17 @@ def fetch_cycle_timestamps(
     cycles: int,
     step_seconds: int,
 ) -> list[int]:
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        rows = cursor.execute(
-            """
-            SELECT timestamp
-            FROM klines
-            WHERE asset = ? AND timeframe = ? AND timestamp BETWEEN ? AND ?
-            ORDER BY timestamp ASC
-            """,
-            (asset, timeframe, from_ts, to_ts),
-        ).fetchall()
-    finally:
-        conn.close()
+    stmt = (
+        select(klines.c.timestamp)
+        .where(
+            klines.c.asset == asset,
+            klines.c.timeframe == timeframe,
+            klines.c.timestamp.between(from_ts, to_ts),
+        )
+        .order_by(klines.c.timestamp.asc())
+    )
+    with get_connection() as conn:
+        rows = conn.execute(stmt).mappings().all()
 
     timestamps = [int(row["timestamp"]) for row in rows]
     if not timestamps:

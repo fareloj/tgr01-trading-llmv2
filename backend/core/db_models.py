@@ -88,7 +88,32 @@ paper_position_state = Table(
     Column('updated_at', Integer, nullable=False)
 )
 
-# 6. System Health
+# 6. Paper Position Reconciliations
+paper_position_reconciliations = Table(
+    'paper_position_reconciliations',
+    metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('asset', String, nullable=False),
+    Column('timestamp', Integer, nullable=False),
+    Column('method', String, nullable=False),
+    Column('initial_brl', Float, nullable=False),
+    Column('initial_btc', Float, nullable=False),
+    Column('reconstructed_brl', Float, nullable=False),
+    Column('reconstructed_btc', Float, nullable=False),
+    Column('observed_brl', Float, nullable=False),
+    Column('observed_btc', Float, nullable=False),
+    Column('avg_cost_brl', Float, nullable=False),
+    Column('realized_pnl_brl', Float, nullable=False),
+    Column('source_log_ids_json', String, nullable=False),
+    Column('details_json', String, nullable=False),
+)
+Index(
+    'idx_paper_position_reconciliations_asset_timestamp',
+    paper_position_reconciliations.c.asset,
+    paper_position_reconciliations.c.timestamp,
+)
+
+# 7. System Health
 system_health = Table(
     'system_health',
     metadata,
@@ -96,7 +121,7 @@ system_health = Table(
     Column('last_heartbeat', Integer, nullable=False)
 )
 
-# 7. RAG Documents
+# 8. RAG Documents
 rag_documents = Table(
     'rag_documents',
     metadata,
@@ -112,7 +137,7 @@ rag_documents = Table(
 Index('idx_rag_documents_published_at', rag_documents.c.published_at)
 Index('idx_rag_documents_source_type', rag_documents.c.source_type)
 
-# 8. RAG Chunks
+# 9. RAG Chunks
 rag_chunks = Table(
     'rag_chunks',
     metadata,
@@ -128,7 +153,7 @@ rag_chunks = Table(
 )
 Index('idx_rag_chunks_document_id', rag_chunks.c.document_id)
 
-# 9. RAG Retrieval Logs
+# 10. RAG Retrieval Logs
 rag_retrieval_logs = Table(
     'rag_retrieval_logs',
     metadata,

@@ -17,6 +17,7 @@ from backend.core.database import init_db
 from backend.core.db_models import (
     klines,
     news,
+    paper_position_reconciliations,
     paper_position_state,
     system_health,
     trade_logs,
@@ -148,6 +149,20 @@ def capital_state_report(blockers: list[str]):
                 paper_position_state.c.realized_pnl_brl,
             ).where(paper_position_state.c.asset == "BTC/BRL")
         ).mappings().first()
+        reconciliation = conn.execute(
+            select(
+                paper_position_reconciliations.c.id,
+                paper_position_reconciliations.c.timestamp,
+                paper_position_reconciliations.c.method,
+                paper_position_reconciliations.c.source_log_ids_json,
+            )
+            .where(paper_position_reconciliations.c.asset == "BTC/BRL")
+            .order_by(
+                paper_position_reconciliations.c.timestamp.desc(),
+                paper_position_reconciliations.c.id.desc(),
+            )
+            .limit(1)
+        ).mappings().first()
 
     missing = {"BRL", "BTC"} - set(amounts)
     if missing:
@@ -182,6 +197,13 @@ def capital_state_report(blockers: list[str]):
     avg_cost = float(position["avg_cost_brl"])
     realized_pnl = float(position["realized_pnl_brl"])
     print(f"Position quantity={quantity:.12f} avg_cost={avg_cost:.8f} realized_pnl={realized_pnl:.8f}")
+    if reconciliation is not None:
+        print(
+            "Reconciliation "
+            f"id={reconciliation['id']} method={reconciliation['method']} "
+            f"timestamp={local_dt(reconciliation['timestamp'])} "
+            f"source_logs={reconciliation['source_log_ids_json']}"
+        )
     if not all(math.isfinite(value) for value in (quantity, avg_cost, realized_pnl)):
         blockers.append("paper_position_state possui valor nao finito.")
     elif quantity < 0 or avg_cost < 0:

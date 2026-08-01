@@ -21,6 +21,7 @@ TABLE_ORDER = (
     "trade_logs",
     "virtual_portfolio",
     "paper_position_state",
+    "paper_position_reconciliations",
     "system_health",
     "rag_documents",
     "rag_chunks",

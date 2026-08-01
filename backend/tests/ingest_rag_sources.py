@@ -1,12 +1,16 @@
 import argparse
 import sys
+import time
 from pathlib import Path
+
+from sqlalchemy import select
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 PROJECT_DIR = BACKEND_DIR.parent
 sys.path.insert(0, str(BACKEND_DIR.parent))
 
 from backend.core.database import get_connection
+from backend.core.db_models import news
 from backend.rag.rag_store import init_rag_tables, upsert_document
 
 
@@ -34,22 +38,15 @@ def ingest_markdown(path: Path, source_type: str, dry_run: bool) -> int | None:
 
 
 def ingest_recent_news(hours: int, limit: int, dry_run: bool) -> list[int]:
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT timestamp, headline, source
-            FROM news
-            WHERE timestamp >= strftime('%s', 'now') - ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-            """,
-            (hours * 3600, limit),
-        )
-        rows = cursor.fetchall()
-    finally:
-        conn.close()
+    cutoff = int(time.time()) - (hours * 3600)
+    stmt = (
+        select(news.c.timestamp, news.c.headline, news.c.source)
+        .where(news.c.timestamp >= cutoff)
+        .order_by(news.c.timestamp.desc())
+        .limit(limit)
+    )
+    with get_connection() as conn:
+        rows = [dict(row) for row in conn.execute(stmt).mappings()]
 
     ids = []
     for row in rows:

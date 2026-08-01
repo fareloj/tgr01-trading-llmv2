@@ -1,72 +1,79 @@
 import time
+
 import requests
+
 
 class StaleDataError(Exception):
     pass
 
+
 class MBDataGateway:
     def __init__(self):
         self.base_url_v4 = "https://api.mercadobitcoin.net/api/v4"
-        self.timeout = 5.0 # Max latency permitida para não atrasar decisões críticas
-        
+        self.timeout = 5.0
+
     def fetch_latest_kline(self, symbol="BTC-BRL", resolution="1m"):
-        """Busca o candle mais recente do Mercado Bitcoin API v4."""
+        """Fetch the latest available Mercado Bitcoin candle using the official countback parameter."""
         to_ts = int(time.time())
-        from_ts = to_ts - 180 # Pega os últimos 3 minutos para garantir que o array não venha vazio
-        
-        url = f"{self.base_url_v4}/candles?symbol={symbol}&resolution={resolution}&from={from_ts}&to={to_ts}"
-        
+        url = f"{self.base_url_v4}/candles"
+        params = {
+            "symbol": symbol,
+            "resolution": resolution,
+            "to": to_ts,
+            "countback": 5,
+        }
+
         try:
             start_time = time.time()
-            resp = requests.get(url, timeout=self.timeout)
+            response = requests.get(url, params=params, timeout=self.timeout)
             latency = time.time() - start_time
-            
             if latency > 3.0:
-                print(f"[Gateway WARNING] Latência da API altíssima: {latency:.2f}s")
-                
-            resp.raise_for_status()
-            data = resp.json()
-            
-            # Formato MB V4 (UDF): {'t': [...], 'o': [...], 'h': [...], 'l': [...], 'c': [...], 'v': [...]}
-            if not data or 't' not in data or len(data['t']) == 0:
-                raise StaleDataError("API retornou sem dados (array vazio). Pode ser manutenção no provedor.")
-                
-            # Pega sempre o último índice do array (o candle mais recente em formação ou recém-fechado)
-            idx = -1
-            
+                print(f"[Gateway WARNING] Latencia alta na API: {latency:.2f}s")
+
+            response.raise_for_status()
+            data = response.json()
+            required = ("t", "o", "h", "l", "c", "v")
+            if not isinstance(data, dict) or any(not isinstance(data.get(key), list) for key in required):
+                raise ValueError("Resposta de candles nao possui o schema UDF esperado.")
+            lengths = {len(data[key]) for key in required}
+            if lengths == {0}:
+                raise StaleDataError("API retornou candles vazios.")
+            if len(lengths) != 1 or 0 in lengths:
+                raise ValueError("Arrays UDF de candles possuem tamanhos inconsistentes.")
+
             candle = {
-                "timestamp": int(data['t'][idx]),
-                "open": float(data['o'][idx]),
-                "high": float(data['h'][idx]),
-                "low": float(data['l'][idx]),
-                "close": float(data['c'][idx]),
-                "volume": float(data['v'][idx])
+                "timestamp": int(data["t"][-1]),
+                "open": float(data["o"][-1]),
+                "high": float(data["h"][-1]),
+                "low": float(data["l"][-1]),
+                "close": float(data["c"][-1]),
+                "volume": float(data["v"][-1]),
             }
-            
-            # Validações Duras (Safe Mode contra bugs da API)
-            if candle['close'] <= 0 or candle['high'] < candle['low']:
-                raise ValueError(f"Preço malformado. Recebido: close={candle['close']}, high={candle['high']}, low={candle['low']}")
-                
-            if candle['volume'] < 0:
-                raise ValueError(f"Volume anômalo (negativo). Recebido: {candle['volume']}")
-                
-            # Detecta se a API está com lag interno e mandou um candle velho
-            if to_ts - candle['timestamp'] > 300: # Tolerância de 5 minutos
-                raise StaleDataError(f"Candle severamente atrasado da Exchange. TS do candle: {candle['timestamp']}, TS Local: {to_ts}")
-                
+            if candle["close"] <= 0 or candle["high"] < candle["low"]:
+                raise ValueError(
+                    f"Preco malformado: close={candle['close']}, high={candle['high']}, low={candle['low']}"
+                )
+            if candle["volume"] < 0:
+                raise ValueError(f"Volume negativo: {candle['volume']}")
+
+            age_seconds = to_ts - candle["timestamp"]
+            if age_seconds < -60:
+                raise StaleDataError(f"Candle esta no futuro: age={age_seconds}s.")
+            if age_seconds > 300:
+                raise StaleDataError(f"Candle atrasado: age={age_seconds}s > 300s.")
             return candle
-            
         except StaleDataError:
             raise
-        except Exception as e:
-            raise Exception(f"Falha de conexão física/parse com a API do Mercado Bitcoin: {e}")
+        except Exception as exc:
+            raise RuntimeError(f"Falha fisica ou de parse na API do Mercado Bitcoin: {exc}") from exc
+
 
 if __name__ == "__main__":
-    print("Testando Read-Only Gateway na API Real MB...")
-    gw = MBDataGateway()
+    print("Testando gateway read-only na API real do Mercado Bitcoin...")
+    gateway = MBDataGateway()
     try:
-        kline = gw.fetch_latest_kline()
-        print(f"SUCESSO! Último Preço do BTC: R${kline['close']:.2f} | Volume: {kline['volume']:.6f}")
-        print("Objeto completo:", kline)
-    except Exception as e:
-        print(f"[BLOQUEADO PELA MURALHA] Ocorreu um erro no Gateway: {e}")
+        latest = gateway.fetch_latest_kline()
+        print(f"[OK] BTC/BRL: R${latest['close']:.2f} | volume={latest['volume']:.6f}")
+        print(latest)
+    except Exception as exc:
+        print(f"[BLOQUEADO] {type(exc).__name__}: {exc}")

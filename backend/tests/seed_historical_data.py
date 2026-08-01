@@ -10,7 +10,8 @@ import requests
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(BACKEND_DIR.parent))
 
-from backend.core.database import get_connection, get_db_path, init_db
+from backend.core import repository
+from backend.core.database import get_db_path, init_db
 
 
 LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
@@ -42,7 +43,6 @@ def seed_history(
         f"?symbol={symbol}&resolution={timeframe}&from={from_ts}&to={to_ts}"
     )
 
-    conn = None
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -52,39 +52,25 @@ def seed_history(
             print(f"Erro ao buscar dados da API. Resposta: {data}")
             return
 
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        count = 0
+        candles = []
         for i in range(len(data["t"])):
-            cursor.execute('''
-                INSERT OR IGNORE INTO klines (asset, timeframe, timestamp, open, high, low, close, volume)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                asset,
-                timeframe,
-                int(data["t"][i]),
-                float(data["o"][i]),
-                float(data["h"][i]),
-                float(data["l"][i]),
-                float(data["c"][i]),
-                float(data["v"][i]),
-            ))
+            candles.append({
+                "asset": asset,
+                "timeframe": timeframe,
+                "timestamp": int(data["t"][i]),
+                "open": float(data["o"][i]),
+                "high": float(data["h"][i]),
+                "low": float(data["l"][i]),
+                "close": float(data["c"][i]),
+                "volume": float(data["v"][i]),
+            })
 
-            if cursor.rowcount > 0:
-                count += 1
-
-        conn.commit()
-        print(f"Sucesso! {count} novos candles historicos inseridos no PostgreSQL.")
+        count = repository.add_klines(candles)
+        print(f"Sucesso! {count} candles historicos processados no PostgreSQL.")
         print("O robo agora deve ter dados suficientes para operar no proximo ciclo.")
 
     except Exception as e:
         print(f"Falha no Seeding: {type(e).__name__}: {e}")
-
-    finally:
-        if conn is not None:
-            conn.close()
-
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Seed historical Mercado Bitcoin candles into PostgreSQL.")
