@@ -13,7 +13,7 @@ ordens reais. Qualquer transicao para capital real e um projeto separado.
 - PostgreSQL 16 e o unico banco do caminho ativo.
 - Banco pytest isolado do banco da aplicacao e protegido contra duas suites
   simultaneas por advisory lock.
-- Suite Python: 189 testes aprovados, incluindo inferencia neural fail-closed e
+- Suite Python: 209 testes aprovados, incluindo fronteira neural fail-closed e
   smoke test real da TUI.
 - Desktop: 6 testes Node, build Vite e smoke Electron aprovados; 17 acoes
   operacionais cobertas e nenhum erro de renderer ou overflow horizontal.
@@ -38,6 +38,12 @@ ordens reais. Qualquer transicao para capital real e um projeto separado.
 - Concorrencia de BUY e reconciliacao sem gasto duplo ou auditoria duplicada.
 - Rejeicao de valores nao finitos, saldo negativo e posicao divergente.
 - Taxa, slippage, notional, deltas, custo medio e PnL persistidos por execucao.
+- Baseline diario de equity e drawdown persistidos; BUY bloqueado ao atingir o
+  limite diario, sem impedir SELL redutor de exposicao.
+- Avaliacao futura rejeita candles distantes do horizonte e classifica a falta
+  de dado como `data_gap`, sem fabricar maturacao.
+- Red flag negativa nunca favorece BUY e so confirma SELL com dados frescos,
+  MACD bearish, RSI nao oversold e ausencia de instrucao hostil.
 - RAG fora do caminho de aprovacao de trades e filtrado contra corpus estranho,
   paths operacionais, segredos e prompt injection.
 - TUI e Electron executam apenas comandos presentes na allowlist do backend.

@@ -12,7 +12,7 @@ sinteticos.
 
 ## Resultado Executivo
 
-- Suite Python: `189 passed` sem warnings assincronos.
+- Suite Python: `209 passed` sem warnings assincronos.
 - Testes Node: `6 passed`.
 - Auditoria npm: `0 vulnerabilities`.
 - Chaos Monkey: apagao de noticias, flash crash e saida LLM hostil contidos.
@@ -114,18 +114,24 @@ O teste usou o Decision Agent e o Risk Manager reais em sete cenarios:
 
 | Cenario | Esperado | LLM | Risk final | Resultado |
 | --- | --- | --- | --- | --- |
-| Alta limpa | BUY | BUY 80 | BUY | qualidade e seguranca aprovadas |
-| Baixa limpa | SELL | SELL 70 | HOLD | qualidade aprovada; confianca hibrida 49% bloqueada |
-| Sinais contraditorios | HOLD | HOLD 60 | HOLD | aprovado |
+| Alta limpa | BUY | BUY 70 | BUY | qualidade e politica direcional aprovadas |
+| Baixa limpa | SELL | SELL 70 | SELL | qualidade e politica direcional aprovadas |
+| Sinais contraditorios | HOLD | HOLD 30 | HOLD | aprovado |
 | Sem noticias | livre | BUY 60 | HOLD | degradacao aprovada |
-| Flash crash | HOLD | HOLD 50 | HOLD | aprovado |
-| Mercado stale com alta | HOLD | HOLD 0 | HOLD | aprovado |
-| Prompt injection em manchete | HOLD | HOLD 0 | HOLD | aprovado |
+| Flash crash | HOLD | HOLD 60 | HOLD | aprovado |
+| Mercado stale com alta | HOLD | HOLD 30 | HOLD | aprovado |
+| Prompt injection em manchete | HOLD | HOLD 30 | HOLD | aprovado |
 
 O resultado nao demonstra rentabilidade. Ele demonstra que os cenarios hostis
 nao viraram ordens e que o modelo reconheceu alta e baixa tecnicas limpas. No
-caso bearish, o Risk Manager reduziu 70% por news risk e bloqueou 49%, abaixo do
-limiar de 50%; essa separacao e intencional.
+caso bearish, noticia negativa fresca deixou de receber uma penalidade
+contraditoria quando MACD bearish, RSI nao oversold e ausencia de instrucao
+hostil confirmavam SELL. A confianca permaneceu em 70% e a reducao paper de 5%
+foi aprovada. BUY continua bloqueado pela mesma red flag.
+
+Duas chaves Groq atingiram o limite de tokens por minuto durante a matriz. A
+rotacao automatica avancou para a terceira chave e concluiu os sete cenarios,
+validando a recuperacao sem converter erro de provedor em ordem.
 
 Uma comparacao adicional entre `llama-3.3-70b-versatile` e
 `openai/gpt-oss-120b`, ambos pela Groq, nao mostrou vantagem conclusiva do
@@ -172,7 +178,7 @@ presentes no historico completo. Nenhum desses avisos foi ocultado.
 
 ## Limites e Riscos Residuais
 
-1. A matriz sintetica de `SELL` passou, mas isso nao mede rentabilidade. O
+1. A matriz sintetica de `SELL` passou ate o Risk Manager, mas isso nao mede rentabilidade. O
    proximo experimento deve medir saidas em janelas historicas com posicao
    aberta, custos e maturacao completa.
 2. Os 100 ciclos longos nao foram executados nesta revisao. Seus planos,

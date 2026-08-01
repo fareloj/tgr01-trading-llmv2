@@ -26,7 +26,7 @@ class RiskManager:
         self.max_exposure = exposure_limit
         self.cooldown_minutes = cooldown_minutes
 
-    def calculate_system_reliability(self, payload: dict) -> float:
+    def calculate_system_reliability(self, payload: dict, action: str | None = None) -> float:
         """
         Calcula o penalizador de confianca baseado na saude dos dados em tempo real.
         Retorna um valor entre 0.0 e 1.0.
@@ -48,7 +48,7 @@ class RiskManager:
             reliability *= 0.6
 
         news_risk = payload.get("news_risk", {})
-        if news_risk.get("has_negative_red_flag"):
+        if news_risk.get("has_negative_red_flag") and not self._negative_news_confirms_sell(payload, action):
             print("[Risk] Aviso: Red flag negativa em noticias. Penalizando confiabilidade estrutural (x0.7).")
             reliability *= 0.7
 
@@ -160,7 +160,7 @@ class RiskManager:
                 "executed_size": 0.0,
             }
 
-        sys_rel = self.calculate_system_reliability(payload)
+        sys_rel = self.calculate_system_reliability(payload, action=action)
         hybrid_confidence = (conviction / 100.0) * sys_rel
 
         if hybrid_confidence < 0.50:
@@ -238,6 +238,25 @@ class RiskManager:
                 return self._hold(f"Directional Gate: SELL bloqueado por MACD {macd_status}")
 
         return None
+
+    def _negative_news_confirms_sell(self, payload: dict, action: str | None) -> bool:
+        if str(action or "").strip().upper() != "SELL":
+            return False
+
+        data_health = payload.get("data_health", {})
+        news_risk = payload.get("news_risk", {})
+        tech = payload.get("technical_context", {})
+        if data_health.get("is_market_data_stale") or data_health.get("is_news_stale"):
+            return False
+        if news_risk.get("has_untrusted_instruction"):
+            return False
+
+        rsi_status = tech.get("rsi", {}).get("status")
+        macd_status = tech.get("macd", {}).get("status")
+        return rsi_status != "OVERSOLD" and macd_status in {
+            "BEARISH_EXPANDING",
+            "BEARISH_DIVERGENCE",
+        }
 
     def _cooldown_gate(self, action: str) -> dict | None:
         if self.cooldown_minutes <= 0:

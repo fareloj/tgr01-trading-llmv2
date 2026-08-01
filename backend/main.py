@@ -165,7 +165,8 @@ def run_trading_cycle():
     print(f"      -> MOTIVO: {final_order['reason']}")
 
     print("[4/4] Execucao e Auditoria.")
-    sys_rel = rm.calculate_system_reliability(payload)
+    reliability_action = None if is_llm_technical_failure(llm_decision) else llm_decision.action
+    sys_rel = rm.calculate_system_reliability(payload, action=reliability_action)
 
     try:
         with database.engine.begin() as conn:

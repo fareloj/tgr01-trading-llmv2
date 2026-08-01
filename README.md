@@ -23,16 +23,19 @@ with reproducible evidence, safety properties, and known limitations.
 The latest [operational red-team report](RED_TEAM_REPORT_2026-08-01.md) covers
 the Electron/TUI command surface, prompt-injection defenses, process handling,
 dependency auditing, external RAG health, and a seven-scenario LLM safety
-matrix. The current acceptance records `189` passing Python tests, `6` passing
+matrix. The current acceptance records `209` passing Python tests, `6` passing
 Node tests, zero npm vulnerabilities, and `7/7` checks for both directional
 quality and safety. These checks validate contracts and failure behavior, not
 profitability.
 
 The [deterministic tool protocol report](LLM_TOOL_RED_TEAM_REPORT_2026-08-01.md)
 adds bounded LLM-requested analysis tools, objective market-event memory, and
-historical model/prompt benchmarks. The expanded suite records `141` passing
-Python tests. The global history and causal-ML pipeline expands that coverage to `158`
-passing Python tests. This layer remains opt-in and paper-only.
+historical model/prompt benchmarks. The current suite includes these layers;
+the analysis-tool path remains opt-in and paper-only.
+
+Active work is tracked in the [trading pipeline roadmap](trading_pipeline_roadmap.md).
+The TCN branch is archived and cannot enter the active decision or execution
+path.
 
 ## Interfaces
 
@@ -88,6 +91,8 @@ The project follows these boundaries:
   order.
 - **Freshness is mandatory.** Stale candles abort before the LLM. News freshness
   is represented explicitly and affects reliability/rules.
+- **Daily loss is explicit.** Mark-to-market equity snapshots establish a local
+  trading-day baseline and block new BUY exposure at the drawdown limit.
 - **Runs are auditable.** The market snapshot, LLM brief, risk verdict, sizing,
   fees, slippage, balance deltas, and PnL state are persisted.
 - **RAG is untrusted evidence.** Retrieved text never enters the deterministic
@@ -96,6 +101,11 @@ The project follows these boundaries:
 Examples of deterministic gates include stale market data, incompatible RSI and
 MACD direction, negative-news red flags, exposure limits, cooldown, insufficient
 balance, and inconsistent position state.
+
+Negative news never authorizes a BUY. It can avoid the generic reliability
+penalty for a SELL only when fresh bearish MACD evidence agrees, RSI is not
+oversold, and the news contains no untrusted instruction. This keeps directional
+meaning consistent between the prompt and deterministic policy.
 
 ## Architecture
 
@@ -277,7 +287,10 @@ Reports cover:
 - paper balances, exposure, fees, slippage, and cost basis;
 - future movement at multiple horizons;
 - outcomes such as `good`, `bad`, `neutral`, `missed_upside`,
-  `avoided_downside`, and `not_matured`.
+  `avoided_downside`, `not_matured`, and `data_gap`.
+
+Future evaluation only accepts a candle near the requested horizon (90 seconds
+by default). A later candle cannot silently stand in for missing market data.
 
 Those labels are review aids, not an absolute truth metric. A second LLM may
 critique the deterministic report, but it does not rewrite prices or indicators.

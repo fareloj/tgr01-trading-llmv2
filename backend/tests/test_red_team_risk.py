@@ -171,6 +171,62 @@ def test_red_team_false_positive_hack():
     assert "news red flag (hack)" in res["reason"]
 
 
+def test_negative_news_can_confirm_bearish_sell_without_weakening_reliability():
+    rm = RiskManager(max_exposure=100.0, cooldown_minutes=0)
+    payload = {
+        "technical_context": {
+            "current_price": 50_000.0,
+            "rsi": {"status": "NEUTRAL"},
+            "macd": {"status": "BEARISH_EXPANDING"},
+            "volatility_atr": {"value": 100.0, "status": "NORMAL"},
+        },
+        "news_context": [{"headline": "Exchange hack confirmed", "source": "pytest"}],
+        "data_health": {"is_market_data_stale": False, "is_news_stale": False},
+        "news_risk": {
+            "has_negative_red_flag": True,
+            "has_untrusted_instruction": False,
+            "risk_level": "ELEVATED",
+            "matched_terms": ["hack"],
+        },
+        "portfolio_context": {"max_allowed_risk_per_trade": 5.0},
+    }
+
+    assert rm.calculate_system_reliability(payload) == 0.7
+    assert rm.calculate_system_reliability(payload, action="BUY") == 0.7
+    assert rm.calculate_system_reliability(payload, action="SELL") == 1.0
+
+    result = rm.evaluate_order("SELL", 70, payload, current_exposure=20.0)
+    assert result["action"] == "SELL"
+    assert result["executed_size"] == 5.0
+    assert "70.0%" in result["reason"]
+
+
+def test_negative_news_does_not_confirm_sell_with_stale_news_or_oversold_rsi():
+    rm = RiskManager(max_exposure=100.0, cooldown_minutes=0)
+    payload = {
+        "technical_context": {
+            "current_price": 50_000.0,
+            "rsi": {"status": "NEUTRAL"},
+            "macd": {"status": "BEARISH_EXPANDING"},
+            "volatility_atr": {"value": 100.0, "status": "NORMAL"},
+        },
+        "news_context": [{"headline": "Exchange hack confirmed", "source": "pytest"}],
+        "data_health": {"is_market_data_stale": False, "is_news_stale": True},
+        "news_risk": {"has_negative_red_flag": True, "has_untrusted_instruction": False},
+        "portfolio_context": {"max_allowed_risk_per_trade": 5.0},
+    }
+
+    assert rm.calculate_system_reliability(payload, action="SELL") == 0.42
+    assert rm.evaluate_order("SELL", 70, payload, current_exposure=20.0)["action"] == "HOLD"
+
+    payload["data_health"]["is_news_stale"] = False
+    payload["technical_context"]["rsi"]["status"] = "OVERSOLD"
+    assert rm.calculate_system_reliability(payload, action="SELL") == 0.7
+    blocked = rm.evaluate_order("SELL", 90, payload, current_exposure=20.0)
+    assert blocked["action"] == "HOLD"
+    assert "RSI OVERSOLD" in blocked["reason"]
+
+
 def test_red_team_all_in_suicidal():
     """
     Scenario 3: test_red_team_all_in_suicidal()
