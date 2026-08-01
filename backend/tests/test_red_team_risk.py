@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 from pathlib import Path
@@ -7,6 +8,55 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR.parent))
 
 from backend.risk.risk_manager import RiskManager
+
+
+def test_risk_manager_rejects_nonfinite_or_out_of_range_inputs():
+    rm = RiskManager(max_exposure=80.0, cooldown_minutes=0)
+    payload = {
+        "technical_context": {
+            "current_price": 40000.0,
+            "rsi": {"status": "NEUTRAL"},
+            "macd": {"status": "BULLISH_EXPANDING"},
+            "volatility_atr": 100.0,
+        },
+        "news_context": [{"headline": "safe"}],
+        "data_health": {"is_market_data_stale": False, "is_news_stale": False},
+        "news_risk": {"has_negative_red_flag": False},
+        "portfolio_context": {"max_allowed_risk_per_trade": 5.0},
+    }
+
+    for conviction, exposure in (
+        (math.nan, 10.0),
+        (math.inf, 10.0),
+        (80.0, math.nan),
+        (80.0, -1.0),
+        (101.0, 10.0),
+    ):
+        result = rm.evaluate_order("BUY", conviction, payload, exposure)
+        assert result["action"] == "HOLD"
+        assert result["executed_size"] == 0.0
+
+    payload["portfolio_context"]["max_allowed_risk_per_trade"] = math.nan
+    assert rm.evaluate_order("BUY", 80, payload, 10)["action"] == "HOLD"
+
+
+def test_risk_configuration_and_kelly_reject_invalid_numbers():
+    for kwargs in (
+        {"max_exposure": math.nan},
+        {"max_exposure": 101},
+        {"max_daily_drawdown": 0},
+        {"cooldown_minutes": -1},
+    ):
+        try:
+            RiskManager(**kwargs)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"invalid configuration accepted: {kwargs}")
+
+    rm = RiskManager()
+    assert rm.calculate_fractional_kelly(math.nan, 1.5) == 0.0
+    assert rm.calculate_fractional_kelly(1.0, 1.5) == 0.0
 
 
 def test_red_team_flash_crash():

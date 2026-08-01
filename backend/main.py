@@ -13,6 +13,7 @@ from backend.agents.decision_agent import DecisionAgent, has_llm_api_key
 from backend.core.audit import serialize_payload_snapshot
 from backend.core.database import get_db_path, init_db, print_db_diagnostics
 from backend.core import database, repository
+from backend.core.runtime_safety import assess_worker_heartbeats
 from backend.execution.paper_simulator import empty_execution_audit, execute_paper_order
 from backend.features.payload_builder import build_agent_payload
 from backend.risk.risk_manager import RiskManager
@@ -97,40 +98,33 @@ def run_trading_cycle():
         print("=" * 60 + "\n")
         return False
 
-    if has_llm_api_key():
-        print("[2/4] Consultando Decision Agent (LLM)...")
-        agent = DecisionAgent()
-        if os.getenv("LLM_TOOLS_ENABLED", "false").strip().lower() in {"1", "true", "yes"}:
-            from backend.analysis.tool_engine import DeterministicToolEngine
+    if not has_llm_api_key():
+        reason = "Pre-LLM abort: nenhuma chave LLM configurada."
+        print(f"[!] {reason}")
+        print("      -> HOLD tecnico auditado; mocks nao participam do runtime.")
+        audit_hold_without_llm(payload, reason)
+        print("=" * 60 + "\n")
+        return False
 
-            print("      -> Ferramentas deterministicas habilitadas (maximo 3, somente leitura).")
-            evaluation = agent.evaluate_market_with_tools(
-                payload,
-                DeterministicToolEngine(audit=True, persist_events=True),
-                asset="BTC/BRL",
-                timeframe="1m",
-                as_of_timestamp=payload.get("data_health", {}).get("latest_kline_timestamp"),
-            )
-            payload = evaluation.enriched_payload
-            llm_decision = evaluation.decision
-            for result in evaluation.tool_results:
-                print(f"         tool={result.tool} status={result.status} latency={result.latency_ms:.1f}ms")
-        else:
-            llm_decision = agent.evaluate_market(payload)
-    else:
-        print("[2/4] (MOCK) GROQ_API_KEY ausente. Simulando IA...")
-        from backend.agents.contracts import DecisionOutput
+    print("[2/4] Consultando Decision Agent (LLM)...")
+    agent = DecisionAgent()
+    if os.getenv("LLM_TOOLS_ENABLED", "false").strip().lower() in {"1", "true", "yes"}:
+        from backend.analysis.tool_engine import DeterministicToolEngine
 
-        llm_decision = DecisionOutput(
-            action="BUY",
-            conviction=95,
-            reasoning="Simulacao: grafico otimista.",
-            decision_brief=(
-                "Acao BUY: simulacao local sem chave LLM.\n"
-                "Base tecnica: mock otimista usado apenas em teste.\n"
-                "Contexto: nao usar como decisao real."
-            ),
+        print("      -> Ferramentas deterministicas habilitadas (maximo 3, somente leitura).")
+        evaluation = agent.evaluate_market_with_tools(
+            payload,
+            DeterministicToolEngine(audit=True, persist_events=True),
+            asset="BTC/BRL",
+            timeframe="1m",
+            as_of_timestamp=payload.get("data_health", {}).get("latest_kline_timestamp"),
         )
+        payload = evaluation.enriched_payload
+        llm_decision = evaluation.decision
+        for result in evaluation.tool_results:
+            print(f"         tool={result.tool} status={result.status} latency={result.latency_ms:.1f}ms")
+    else:
+        llm_decision = agent.evaluate_market(payload)
 
     print(f"      -> IA Sugeriu: {llm_decision.action} | Conviccao: {llm_decision.conviction}%")
     print(f"      -> Justificativa: {llm_decision.reasoning}")
@@ -180,20 +174,16 @@ def run_trading_cycle():
 
 def _workers_are_healthy() -> bool:
     health_rows = repository.get_system_health()
-
-    current_time = int(time.time())
-    for row in health_rows:
-        worker = row["worker_name"]
-        last_hb = row["last_heartbeat"]
-        limit = 300 if worker == "price_worker" else 3600
-
-        if current_time - last_hb > limit:
-            print(f"[SAFE_MODE_STALE_WORKER] {worker} congelado! Ultimo sinal ha {current_time - last_hb}s.")
-            print("      -> ABORTANDO CICLO PREVENTIVAMENTE. O worker morreu silenciosamente?")
-            print("=" * 60 + "\n")
-            return False
-
-    return True
+    assessment = assess_worker_heartbeats(health_rows)
+    for worker, age in assessment.ages_seconds.items():
+        print(f"[WORKER] {worker} heartbeat_age={age}s")
+    if assessment.healthy:
+        return True
+    for failure in assessment.failures:
+        print(f"[SAFE_MODE_WORKER] {failure}")
+    print("      -> ABORTANDO CICLO PREVENTIVAMENTE. Reinicie e valide os workers.")
+    print("=" * 60 + "\n")
+    return False
 
 
 def _execute_if_approved(connection, final_order: dict, current_price: float, payload: dict) -> dict:

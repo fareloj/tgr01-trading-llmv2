@@ -12,6 +12,7 @@ sys.path.insert(0, str(BACKEND_DIR.parent))
 from backend.core.database import get_connection, get_db_path, init_db, print_db_diagnostics
 from backend.core.clock_sync import check_clock_skew
 from backend.core.db_models import klines, news, system_health
+from backend.core.runtime_safety import MAX_FUTURE_MARKET_DATA_SECONDS, assess_worker_heartbeats
 
 
 def local_date(timestamp: int) -> str:
@@ -116,6 +117,8 @@ def run_preflight(
 
     if kline_age > max_kline_age_seconds:
         return fail(f"Ultimo candle esta stale: {kline_age}s > {max_kline_age_seconds}s.")
+    if kline_age < -MAX_FUTURE_MARKET_DATA_SECONDS:
+        return fail(f"Ultimo candle esta {-kline_age}s no futuro; clock ou fonte invalida.")
 
     ok("Candle mais recente bate com o dia atual e esta fresco.")
 
@@ -143,15 +146,11 @@ def run_preflight(
 
     if require_workers:
         worker_rows = fetch_worker_health()
-        workers = {row["worker_name"]: int(row["last_heartbeat"]) for row in worker_rows}
-        for worker_name, max_age in {"price_worker": 300, "news_worker": 3600}.items():
-            heartbeat = workers.get(worker_name)
-            if heartbeat is None:
-                return fail(f"{worker_name} sem heartbeat em system_health.")
-            age = now - heartbeat
+        assessment = assess_worker_heartbeats(worker_rows, now=now)
+        for worker_name, age in assessment.ages_seconds.items():
             print(f"[WORKER] {worker_name} heartbeat_age={age}s")
-            if age > max_age:
-                return fail(f"{worker_name} stale: heartbeat_age={age}s > {max_age}s.")
+        if not assessment.healthy:
+            return fail("; ".join(assessment.failures))
         ok("Workers obrigatorios estao vivos.")
 
     ok("Preflight de data aprovado.")

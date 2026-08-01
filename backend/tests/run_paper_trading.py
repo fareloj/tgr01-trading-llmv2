@@ -12,6 +12,19 @@ from sqlalchemy.engine import make_url
 
 from backend.core import database
 from backend.main import run_trading_cycle
+from backend.tests.preflight_data_date import run_preflight
+
+
+def run_startup_preflight() -> int:
+    return run_preflight(
+        asset="BTC/BRL",
+        timeframe="1m",
+        require_news_today=True,
+        max_kline_age_seconds=300,
+        require_workers=True,
+        require_clock_sync=True,
+        max_clock_skew_seconds=300,
+    )
 
 
 def backup_db() -> Path | None:
@@ -100,6 +113,9 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+    preflight_code = run_startup_preflight()
+    if preflight_code:
+        raise SystemExit(preflight_code)
     if not args.no_backup:
         backup_db()
     start_paper_trading(cycles=args.cycles, sleep_seconds=args.sleep, backup=not args.no_backup)

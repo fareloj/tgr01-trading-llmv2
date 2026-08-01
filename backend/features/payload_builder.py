@@ -8,6 +8,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_DIR = BASE_DIR.parent
 sys.path.insert(0, str(PROJECT_DIR))
 from backend.core.database import get_db_path
+from backend.core.runtime_safety import MAX_FUTURE_MARKET_DATA_SECONDS
 from backend.features.indicators import get_historical_klines, calculate_technical_status
 
 MARKET_DATA_STALE_SECONDS = 300
@@ -83,8 +84,11 @@ def build_data_health(df, recent_news: list, now: int | None = None) -> dict:
     latest_news_timestamp = max((int(item["timestamp"]) for item in recent_news), default=None)
 
     kline_age_seconds = None
+    is_market_data_future = False
     if latest_kline_timestamp is not None:
-        kline_age_seconds = max(0, now - latest_kline_timestamp)
+        raw_kline_age = now - latest_kline_timestamp
+        is_market_data_future = raw_kline_age < -MAX_FUTURE_MARKET_DATA_SECONDS
+        kline_age_seconds = max(0, raw_kline_age)
 
     news_age_seconds = None
     if latest_news_timestamp is not None:
@@ -93,7 +97,13 @@ def build_data_health(df, recent_news: list, now: int | None = None) -> dict:
     return {
         "latest_kline_timestamp": latest_kline_timestamp,
         "kline_age_seconds": kline_age_seconds,
-        "is_market_data_stale": kline_age_seconds is None or kline_age_seconds > MARKET_DATA_STALE_SECONDS,
+        "is_market_data_stale": (
+            kline_age_seconds is None
+            or is_market_data_future
+            or kline_age_seconds > MARKET_DATA_STALE_SECONDS
+        ),
+        "is_market_data_future": is_market_data_future,
+        "market_data_future_tolerance_seconds": MAX_FUTURE_MARKET_DATA_SECONDS,
         "market_data_stale_threshold_seconds": MARKET_DATA_STALE_SECONDS,
         "latest_news_timestamp": latest_news_timestamp,
         "news_age_seconds": news_age_seconds,

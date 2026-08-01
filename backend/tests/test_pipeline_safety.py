@@ -21,6 +21,7 @@ from backend.agents.decision_agent import (
 from backend.features.payload_builder import build_agent_payload, build_news_risk, sanitize_news_context
 from backend.core.audit import build_payload_snapshot
 from backend.main import audit_hold_without_llm, is_llm_technical_failure
+import backend.main as trading_main
 from backend.risk.risk_manager import RiskManager
 
 
@@ -120,6 +121,36 @@ def test_payload_ignores_news_too_far_in_future():
     headlines = [item["headline"] for item in payload["news_context"]]
     assert "Noticia realista atual" in headlines
     assert "Noticia venenosa do futuro" not in headlines
+
+
+def test_payload_marks_future_market_data_as_stale():
+    _insert_candles(30, latest_age_seconds=-3600)
+    _insert_news()
+
+    payload = build_agent_payload()
+
+    assert payload["data_health"]["is_market_data_future"] is True
+    assert payload["data_health"]["is_market_data_stale"] is True
+
+
+def test_runtime_without_llm_key_audits_hold_and_aborts(monkeypatch):
+    payload = _compatible_payload()
+    audited = []
+    monkeypatch.setattr(trading_main, "init_db", lambda: None)
+    monkeypatch.setattr(trading_main, "print_db_diagnostics", lambda: None)
+    monkeypatch.setattr(trading_main, "_workers_are_healthy", lambda: True)
+    monkeypatch.setattr(trading_main, "build_agent_payload", lambda: payload)
+    monkeypatch.setattr(trading_main, "has_llm_api_key", lambda: False)
+    monkeypatch.setattr(
+        trading_main,
+        "audit_hold_without_llm",
+        lambda received_payload, reason: audited.append((received_payload, reason)),
+    )
+
+    completed = trading_main.run_trading_cycle()
+
+    assert completed is False
+    assert audited == [(payload, "Pre-LLM abort: nenhuma chave LLM configurada.")]
 
 
 def test_risk_manager_blocks_low_reliability_buy():

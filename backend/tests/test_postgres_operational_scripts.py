@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from backend.core import database, repository
 from backend.core.db_models import klines, news
 from backend.tests import ingest_rag_sources, preflight_data_date, run_historical_llm_scenarios
+from backend.tests import run_paper_trading
 from backend.tests import seed_historical_data, start_workers
 from backend.tests import migrate_sqlite_to_postgres
 
@@ -64,6 +65,26 @@ def test_preflight_helpers_and_full_run_use_postgresql(monkeypatch):
         require_clock_sync=True,
         max_clock_skew_seconds=300,
     ) == 0
+
+
+def test_direct_paper_runner_uses_strict_startup_preflight(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        run_paper_trading,
+        "run_preflight",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+
+    assert run_paper_trading.run_startup_preflight() == 0
+    assert captured == {
+        "asset": "BTC/BRL",
+        "timeframe": "1m",
+        "require_news_today": True,
+        "max_kline_age_seconds": 300,
+        "require_workers": True,
+        "require_clock_sync": True,
+        "max_clock_skew_seconds": 300,
+    }
 
 
 def test_historical_timestamp_selection_uses_step_spacing():

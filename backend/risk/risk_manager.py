@@ -1,3 +1,4 @@
+import math
 import time
 
 # get_connection removed
@@ -10,8 +11,19 @@ class RiskManager:
         max_exposure: float = 100.0,
         cooldown_minutes: int = 15,
     ):
-        self.max_daily_drawdown = max_daily_drawdown
-        self.max_exposure = max_exposure
+        try:
+            drawdown_limit = float(max_daily_drawdown)
+            exposure_limit = float(max_exposure)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("risk limits must be numeric") from error
+        if not math.isfinite(drawdown_limit) or drawdown_limit <= 0:
+            raise ValueError("max_daily_drawdown must be finite and positive")
+        if not math.isfinite(exposure_limit) or not 0 < exposure_limit <= 100:
+            raise ValueError("max_exposure must be finite and between 0 and 100")
+        if isinstance(cooldown_minutes, bool) or not isinstance(cooldown_minutes, int) or cooldown_minutes < 0:
+            raise ValueError("cooldown_minutes must be a non-negative integer")
+        self.max_daily_drawdown = drawdown_limit
+        self.max_exposure = exposure_limit
         self.cooldown_minutes = cooldown_minutes
 
     def calculate_system_reliability(self, payload: dict) -> float:
@@ -42,7 +54,15 @@ class RiskManager:
 
         tech = payload.get("technical_context", {})
         atr = self._atr_value(tech)
-        current_price = tech.get("current_price", 1.0)
+        try:
+            current_price = float(tech.get("current_price", 0.0))
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+
+        if not math.isfinite(current_price) or current_price <= 0:
+            return 0.0
+        if not math.isfinite(atr) or atr < 0:
+            return 0.0
 
         if current_price > 0 and (atr / current_price) > 0.05:
             print("[Risk] Aviso: Volatilidade extrema detectada. Penalizando (x0.5).")
@@ -55,7 +75,15 @@ class RiskManager:
         Calcula o Kelly Fracionado para definir o tamanho seguro da aposta.
         Retorna a porcentagem da banca que deve ser alocada na ordem.
         """
-        if win_rate <= 0 or risk_reward_ratio <= 0:
+        try:
+            win_rate = float(win_rate)
+            risk_reward_ratio = float(risk_reward_ratio)
+            fraction = float(fraction)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        if not all(math.isfinite(value) for value in (win_rate, risk_reward_ratio, fraction)):
+            return 0.0
+        if not 0 < win_rate < 1 or risk_reward_ratio <= 0 or not 0 < fraction <= 1:
             return 0.0
 
         kelly_perc = win_rate - ((1 - win_rate) / risk_reward_ratio)
@@ -69,7 +97,24 @@ class RiskManager:
         """
         A muralha deterministica: onde o LLM e barrado pela matematica e pela saude dos dados.
         """
-        action = llm_action.upper()
+        action = str(llm_action).strip().upper()
+
+        try:
+            conviction = float(llm_conviction)
+            exposure = float(current_exposure)
+            max_allowed = float(
+                payload.get("portfolio_context", {}).get("max_allowed_risk_per_trade", 5.0)
+            )
+        except (TypeError, ValueError, OverflowError):
+            return self._hold("Risk input invalido ou nao numerico.")
+        if not all(math.isfinite(value) for value in (conviction, exposure, max_allowed)):
+            return self._hold("Risk input nao finito.")
+        if not 0 <= conviction <= 100:
+            return self._hold("Conviccao fora do intervalo 0..100.")
+        if exposure < 0:
+            return self._hold("Exposicao nao pode ser negativa.")
+        if not 0 < max_allowed <= 100:
+            return self._hold("Limite por trade fora do intervalo 0..100.")
 
         if action == "HOLD":
             return {"action": "HOLD", "reason": "LLM sugeriu HOLD.", "executed_size": 0.0}
@@ -85,23 +130,23 @@ class RiskManager:
         if cooldown_block:
             return cooldown_block
 
-        if llm_conviction < 70:
+        if conviction < 70:
             return {
                 "action": "HOLD",
-                "reason": f"Conviccao bruta da IA insuficiente ({llm_conviction}%). Exige-se minimo de 70%.",
+                "reason": f"Conviccao bruta da IA insuficiente ({conviction:g}%). Exige-se minimo de 70%.",
                 "executed_size": 0.0,
             }
 
         news = payload.get("news_context", [])
-        if len(news) == 0 and llm_conviction < 80:
+        if len(news) == 0 and conviction < 80:
             return {
                 "action": "HOLD",
-                "reason": f"Noticias velhas/ausentes. IA nao tem conviccao absoluta ({llm_conviction}% < 80%).",
+                "reason": f"Noticias velhas/ausentes. IA nao tem conviccao absoluta ({conviction:g}% < 80%).",
                 "executed_size": 0.0,
             }
 
         sys_rel = self.calculate_system_reliability(payload)
-        hybrid_confidence = (llm_conviction / 100.0) * sys_rel
+        hybrid_confidence = (conviction / 100.0) * sys_rel
 
         if hybrid_confidence < 0.50:
             return {
@@ -118,7 +163,6 @@ class RiskManager:
             }
 
         executed_size = 0.0
-        max_allowed = payload.get("portfolio_context", {}).get("max_allowed_risk_per_trade", 5.0)
         if action == "BUY":
             raw_size = self.calculate_fractional_kelly(win_rate=0.55, risk_reward_ratio=1.5, fraction=0.5)
             executed_size = min(raw_size, max_allowed)
@@ -198,9 +242,12 @@ class RiskManager:
 
     def _atr_value(self, tech: dict) -> float:
         atr = tech.get("volatility_atr", 0.0)
-        if isinstance(atr, dict):
-            return float(atr.get("value", 0.0) or 0.0)
-        return float(atr or 0.0)
+        try:
+            if isinstance(atr, dict):
+                return float(atr.get("value", 0.0) or 0.0)
+            return float(atr or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            return math.nan
 
     def _atr_status(self, tech: dict) -> str | None:
         atr = tech.get("volatility_atr")

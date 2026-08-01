@@ -24,6 +24,7 @@ from backend.core.db_models import (
     virtual_portfolio,
 )
 from backend.features.payload_builder import build_agent_payload
+from backend.core.runtime_safety import REQUIRED_WORKERS, assess_worker_heartbeats
 from backend.tests.analyze_trade_logs import classify_reason
 
 
@@ -87,21 +88,15 @@ def worker_report(blockers: list[str], warnings: list[str]):
         workers = conn.execute(
             select(system_health.c.worker_name, system_health.c.last_heartbeat).order_by(system_health.c.worker_name)
         ).mappings().all()
-    worker_map = {row["worker_name"]: int(row["last_heartbeat"]) for row in workers}
-    expected = {"price_worker": 300, "news_worker": 3600}
-
-    for worker, max_age in expected.items():
-        heartbeat = worker_map.get(worker)
-        if heartbeat is None:
-            blockers.append(f"{worker} sem heartbeat.")
-            print(f"[FAIL] {worker}: sem heartbeat")
-            continue
-        age = now - heartbeat
-        print(f"{worker}: heartbeat={local_dt(heartbeat)} age={age}s")
-        if age > max_age:
-            blockers.append(f"{worker} stale: {age}s > {max_age}s.")
-        elif age > max_age / 2:
+    assessment = assess_worker_heartbeats(workers, now=now)
+    worker_map = {row["worker_name"]: row["last_heartbeat"] for row in workers}
+    for worker, age in assessment.ages_seconds.items():
+        print(f"{worker}: heartbeat={local_dt(worker_map[worker])} age={age}s")
+        if age > REQUIRED_WORKERS[worker] / 2:
             warnings.append(f"{worker} heartbeat acima de metade do limite: {age}s.")
+    blockers.extend(assessment.failures)
+    for failure in assessment.failures:
+        print(f"[FAIL] {failure}")
 
 
 def payload_report(blockers: list[str], warnings: list[str]):
@@ -214,12 +209,12 @@ def capital_state_report(blockers: list[str]):
         )
 
 
-def llm_report(warnings: list[str]):
+def llm_report(blockers: list[str]):
     print_section("LLM")
     keys = load_api_keys()
     print(f"Chaves configuradas: {len(keys)}")
     if not keys:
-        warnings.append("Nenhuma chave LLM configurada; pipeline usara mock/fallback.")
+        blockers.append("Nenhuma chave LLM configurada; runtime falha para HOLD.")
 
 
 def audit_report(since_id: int | None, warnings: list[str]):
@@ -317,6 +312,6 @@ if __name__ == "__main__":
     worker_report(blockers, warnings)
     payload_report(blockers, warnings)
     capital_state_report(blockers)
-    llm_report(warnings)
+    llm_report(blockers)
     audit_report(args.since_id, warnings)
     raise SystemExit(final_verdict(blockers, warnings, strict=args.strict))
