@@ -19,7 +19,7 @@ class BarrierTargets:
     timestamps: np.ndarray
     labels: np.ndarray
     horizons_minutes: tuple[int, ...]
-    barrier_pct: float
+    barrier_pcts: tuple[float, ...]
 
     def __post_init__(self) -> None:
         if self.timestamps.ndim != 1 or self.labels.shape != (
@@ -31,6 +31,8 @@ class BarrierTargets:
             raise ValueError("barrier labels must use int8")
         if not np.isin(self.labels, (-1, 0, 1, 2)).all():
             raise ValueError("barrier labels contain an unsupported class")
+        if len(self.barrier_pcts) != len(self.horizons_minutes):
+            raise ValueError("barrier percentages must match horizons")
 
 
 def first_touch_barrier_targets(
@@ -41,7 +43,7 @@ def first_touch_barrier_targets(
     is_observed: np.ndarray,
     horizons_minutes: Iterable[int],
     *,
-    barrier_pct: float = 0.20,
+    barrier_pct: float | Iterable[float] = 0.20,
     timeframe_seconds: int = 60,
 ) -> BarrierTargets:
     horizons = tuple(int(item) for item in horizons_minutes)
@@ -50,7 +52,15 @@ def first_touch_barrier_targets(
         raise ValueError("barrier inputs must be aligned non-empty vectors")
     if not horizons or any(item <= 0 for item in horizons):
         raise ValueError("barrier horizons must be positive")
-    if barrier_pct <= 0 or timeframe_seconds <= 0:
+    if isinstance(barrier_pct, (float, int)):
+        barrier_pcts = (float(barrier_pct),) * len(horizons)
+    else:
+        barrier_pcts = tuple(float(item) for item in barrier_pct)
+    if (
+        len(barrier_pcts) != len(horizons)
+        or any(item <= 0 for item in barrier_pcts)
+        or timeframe_seconds <= 0
+    ):
         raise ValueError("barrier percentage and timeframe must be positive")
     if np.any(~np.isfinite(high)) or np.any(~np.isfinite(low)) or np.any(~np.isfinite(close)):
         raise ValueError("barrier prices must be finite")
@@ -62,7 +72,6 @@ def first_touch_barrier_targets(
     segments = derive_continuous_segments(timestamps, timeframe_seconds=timeframe_seconds)
     observed_prefix = np.concatenate(([0], np.cumsum(observed, dtype=np.int64)))
     labels = np.full((rows, len(horizons)), INVALID_DIRECTION, dtype=np.int8)
-    barrier_fraction = barrier_pct / 100.0
 
     for horizon_index, horizon in enumerate(horizons):
         if horizon >= rows:
@@ -77,6 +86,7 @@ def first_touch_barrier_targets(
         )
         unresolved = starts[valid]
         labels[unresolved, horizon_index] = HOLD_DIRECTION
+        barrier_fraction = barrier_pcts[horizon_index] / 100.0
         upper = close * (1.0 + barrier_fraction)
         lower = close * (1.0 - barrier_fraction)
 
@@ -96,5 +106,5 @@ def first_touch_barrier_targets(
         timestamps=timestamps.copy(),
         labels=labels,
         horizons_minutes=horizons,
-        barrier_pct=float(barrier_pct),
+        barrier_pcts=barrier_pcts,
     )

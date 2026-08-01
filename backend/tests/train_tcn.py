@@ -49,6 +49,8 @@ from backend.ml.training import (
 REPORTS_DIR = PROJECT_DIR / "backend" / "reports"
 DEFAULT_GLOBAL = REPORTS_DIR / "binance_full_dataset.csv"
 DEFAULT_LOCAL = REPORTS_DIR / "mb_tcn_dataset.csv"
+DEFAULT_GLOBAL_BARRIERS = REPORTS_DIR / "binance_barrier_targets.npz"
+DEFAULT_LOCAL_BARRIERS = REPORTS_DIR / "mb_barrier_targets.npz"
 DEFAULT_OUTPUT = REPORTS_DIR / "tcn"
 HORIZONS = (15, 60)
 
@@ -166,8 +168,13 @@ def _prepare_domain(
     evaluation_stride: int,
     maximum_sequences: int | None,
     calibration: bool = False,
+    direction_targets_path: Path | None = None,
 ) -> tuple[ArrayMarketData, RobustFeatureScaler, object, dict[str, np.ndarray]]:
-    data = load_market_arrays(path, HORIZONS)
+    data = load_market_arrays(
+        path,
+        HORIZONS,
+        direction_targets_path=direction_targets_path,
+    )
     ranges = chronological_ranges(data.timestamps, purge_minutes=max(HORIZONS))
     if scaler is None:
         scaler = RobustFeatureScaler.fit(data.features[slice(*ranges.train)])
@@ -244,6 +251,13 @@ def main() -> int:
     )
     parser.add_argument("--global-dataset", default=str(DEFAULT_GLOBAL))
     parser.add_argument("--local-dataset", default=str(DEFAULT_LOCAL))
+    parser.add_argument(
+        "--direction-target-mode",
+        choices=("endpoint", "barrier"),
+        default="endpoint",
+    )
+    parser.add_argument("--global-barrier-targets", default=str(DEFAULT_GLOBAL_BARRIERS))
+    parser.add_argument("--local-barrier-targets", default=str(DEFAULT_LOCAL_BARRIERS))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--sequence-length", type=int, default=240)
     parser.add_argument("--channels", type=int, default=32)
@@ -288,6 +302,16 @@ def main() -> int:
     set_reproducible_seed(args.seed)
     global_path = Path(args.global_dataset).resolve()
     local_path = Path(args.local_dataset).resolve()
+    global_barriers = (
+        Path(args.global_barrier_targets).resolve()
+        if args.direction_target_mode == "barrier"
+        else None
+    )
+    local_barriers = (
+        Path(args.local_barrier_targets).resolve()
+        if args.direction_target_mode == "barrier"
+        else None
+    )
     output_dir = Path(args.output_dir).resolve()
     tcn_config = TCNConfig(
         input_channels=len(FEATURE_COLUMNS),
@@ -310,6 +334,7 @@ def main() -> int:
         train_stride=args.global_stride,
         evaluation_stride=args.global_stride,
         maximum_sequences=args.maximum_sequences,
+        direction_targets_path=global_barriers,
     )
     print(f"global_sequences={dict((name, len(value)) for name, value in global_indices.items())}")
     target_scaler = RobustTargetScaler.fit(
@@ -320,6 +345,11 @@ def main() -> int:
         global_data.targets[global_indices["train"]],
         actionable_move_pct=0.20,
         weighting_power=args.class_weight_power,
+        direction_targets=(
+            global_data.direction_targets[global_indices["train"]]
+            if global_data.direction_targets is not None
+            else None
+        ),
     )
     global_device_data = (
         DeviceMarketData.from_arrays(global_data, device)
@@ -378,6 +408,10 @@ def main() -> int:
         "actionable_move_pct": 0.20,
         "direction_loss_weight": args.direction_loss_weight,
         "class_weight_power": args.class_weight_power,
+        "direction_target_mode": args.direction_target_mode,
+        "global_barrier_targets": (
+            _fingerprint_dataset(global_barriers) if global_barriers is not None else None
+        ),
         "global_direction_class_weights": global_direction_weights.tolist(),
         "global_dataset": global_fingerprint,
         "global_ranges": global_ranges.as_dict(),
@@ -402,6 +436,7 @@ def main() -> int:
         evaluation_stride=args.local_stride,
         maximum_sequences=args.maximum_sequences,
         calibration=True,
+        direction_targets_path=local_barriers,
     )
     print(f"local_sequences={dict((name, len(value)) for name, value in local_indices.items())}")
     local_device_data = (
@@ -422,6 +457,11 @@ def main() -> int:
         local_data.targets[local_indices["train"]],
         actionable_move_pct=0.20,
         weighting_power=args.class_weight_power,
+        direction_targets=(
+            local_data.direction_targets[local_indices["train"]]
+            if local_data.direction_targets is not None
+            else None
+        ),
     )
     local_validation = _loader(
         local_data,
@@ -455,7 +495,12 @@ def main() -> int:
         device=device,
         device_data=local_device_data,
     )
-    calibration_predictions, calibration_direction_logits, calibration_targets = predict_outputs(
+    (
+        calibration_predictions,
+        calibration_direction_logits,
+        calibration_targets,
+        calibration_direction_targets,
+    ) = predict_outputs(
         model,
         calibration_loader,
         device=device,
@@ -471,10 +516,14 @@ def main() -> int:
         calibration_targets,
         HORIZONS,
         actionable_move_pct=0.20,
+        actual_classes=calibration_direction_targets,
     )
     checkpoint_payload = {
         **provenance,
         "local_dataset": local_fingerprint,
+        "local_barrier_targets": (
+            _fingerprint_dataset(local_barriers) if local_barriers is not None else None
+        ),
         "local_ranges": local_ranges.as_dict(),
         "local_sequences": {name: len(value) for name, value in local_indices.items()},
         "local_history": local_history,

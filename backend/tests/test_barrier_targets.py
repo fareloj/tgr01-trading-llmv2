@@ -61,3 +61,21 @@ def test_first_touch_rejects_windows_with_missing_or_discontinuous_future():
     assert targets.labels[0, 0] == INVALID_DIRECTION
     assert targets.labels[6, 0] == INVALID_DIRECTION
     assert targets.labels[8, 0] == HOLD_DIRECTION
+
+
+def test_first_touch_supports_horizon_specific_barriers():
+    timestamps, high, low, close, observed = _series()
+    high[1] = 100.6
+
+    targets = first_touch_barrier_targets(
+        timestamps,
+        high,
+        low,
+        close,
+        observed,
+        (3, 5),
+        barrier_pct=(0.5, 1.0),
+    )
+
+    assert targets.labels[0].tolist() == [BUY_DIRECTION, HOLD_DIRECTION]
+    assert targets.barrier_pcts == (0.5, 1.0)

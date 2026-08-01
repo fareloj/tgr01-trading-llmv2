@@ -21,6 +21,7 @@ class ArrayMarketData:
     features: np.ndarray
     targets: np.ndarray
     horizons_minutes: tuple[int, ...]
+    direction_targets: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         rows = len(self.timestamps)
@@ -34,6 +35,11 @@ class ArrayMarketData:
             raise ValueError("feature matrix has an unexpected shape")
         if self.targets.shape != (rows, len(self.horizons_minutes)):
             raise ValueError("target matrix has an unexpected shape")
+        if self.direction_targets is not None:
+            if self.direction_targets.shape != (rows, len(self.horizons_minutes)):
+                raise ValueError("direction target matrix has an unexpected shape")
+            if not np.isin(self.direction_targets, (-1, 0, 1, 2)).all():
+                raise ValueError("direction target matrix contains an unsupported class")
 
 
 @dataclass(frozen=True)
@@ -174,7 +180,12 @@ class RobustTargetScaler:
         )
 
 
-def load_market_arrays(path: Path, horizons_minutes: Iterable[int]) -> ArrayMarketData:
+def load_market_arrays(
+    path: Path,
+    horizons_minutes: Iterable[int],
+    *,
+    direction_targets_path: Path | None = None,
+) -> ArrayMarketData:
     horizons = tuple(int(item) for item in horizons_minutes)
     if not horizons or any(item <= 0 for item in horizons):
         raise ValueError("horizons must contain positive minute values")
@@ -195,6 +206,16 @@ def load_market_arrays(path: Path, horizons_minutes: Iterable[int]) -> ArrayMark
     if np.any(np.diff(timestamps) <= 0):
         raise ValueError("dataset timestamps must be strictly increasing")
     segment_ids = derive_continuous_segments(timestamps)
+    direction_targets = None
+    if direction_targets_path is not None:
+        with np.load(direction_targets_path, allow_pickle=False) as document:
+            barrier_timestamps = document["timestamps"].astype(np.int64, copy=False)
+            barrier_horizons = tuple(int(item) for item in document["horizons_minutes"])
+            direction_targets = document["labels"].astype(np.int8, copy=False)
+        if barrier_horizons != horizons:
+            raise ValueError("barrier target horizons do not match the market dataset")
+        if not np.array_equal(barrier_timestamps, timestamps):
+            raise ValueError("barrier target timestamps do not match the market dataset")
     return ArrayMarketData(
         timestamps=timestamps,
         # Exported segment ids are local to each source chunk. Rebuilding them
@@ -206,6 +227,7 @@ def load_market_arrays(path: Path, horizons_minutes: Iterable[int]) -> ArrayMark
         # They remain in the timeline and are filtered only as sequence ends.
         targets=frame[target_columns].to_numpy(dtype=np.float32, copy=True),
         horizons_minutes=horizons,
+        direction_targets=direction_targets,
     )
 
 
@@ -319,6 +341,8 @@ def observed_target_indices(data: ArrayMarketData, indices: np.ndarray) -> np.nd
     if len(indices) and (int(indices.min()) < 0 or int(indices.max()) >= len(data.timestamps)):
         raise ValueError("indices are outside the market data")
     eligible = data.is_observed[indices] & np.isfinite(data.targets[indices]).all(axis=1)
+    if data.direction_targets is not None:
+        eligible &= (data.direction_targets[indices] >= 0).all(axis=1)
     return indices[eligible]
 
 
@@ -341,18 +365,22 @@ class MarketSequenceDataset(Dataset):
     def __len__(self) -> int:
         return len(self.indices)
 
-    def __getitem__(self, item: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, item: int):
         end = int(self.indices[item])
         start = end - self.sequence_length + 1
         features = np.ascontiguousarray(self.data.features[start : end + 1].T)
         targets = np.ascontiguousarray(self.data.targets[end])
-        return torch.from_numpy(features), torch.from_numpy(targets)
+        result = (torch.from_numpy(features), torch.from_numpy(targets))
+        if self.data.direction_targets is None:
+            return result
+        return (*result, torch.from_numpy(self.data.direction_targets[end].astype(np.int64)))
 
 
 @dataclass(frozen=True)
 class DeviceMarketData:
     features: torch.Tensor
     targets: torch.Tensor
+    direction_targets: torch.Tensor | None = None
 
     @classmethod
     def from_arrays(cls, data: ArrayMarketData, device: torch.device) -> "DeviceMarketData":
@@ -361,6 +389,11 @@ class DeviceMarketData:
         return cls(
             features=torch.from_numpy(data.features).to(device),
             targets=torch.from_numpy(data.targets).to(device),
+            direction_targets=(
+                torch.from_numpy(data.direction_targets.astype(np.int64, copy=False)).to(device)
+                if data.direction_targets is not None
+                else None
+            ),
         )
 
 
@@ -405,7 +438,11 @@ class DeviceSequenceBatcher:
             ends = indices[start : start + self.batch_size]
             rows = ends[:, None] - self.offsets[None, :]
             features = self.data.features[rows].permute(0, 2, 1).contiguous()
-            yield features, self.data.targets[ends]
+            result = (features, self.data.targets[ends])
+            if self.data.direction_targets is None:
+                yield result
+            else:
+                yield (*result, self.data.direction_targets[ends])
 
 
 def sha256_file(path: Path, *, chunk_size: int = 8 * 1024 * 1024) -> str:

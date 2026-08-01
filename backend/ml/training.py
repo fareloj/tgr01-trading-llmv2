@@ -47,6 +47,7 @@ def fit_direction_class_weights(
     *,
     actionable_move_pct: float,
     weighting_power: float = 0.5,
+    direction_targets: np.ndarray | None = None,
 ) -> torch.Tensor:
     if (
         targets.ndim != 2
@@ -55,8 +56,13 @@ def fit_direction_class_weights(
         or not 0 <= weighting_power <= 1
     ):
         raise ValueError("direction class weight inputs are invalid")
-    tensor = torch.from_numpy(targets.astype(np.float32, copy=False))
-    classes = direction_classes(tensor, actionable_move_pct)
+    if direction_targets is None:
+        tensor = torch.from_numpy(targets.astype(np.float32, copy=False))
+        classes = direction_classes(tensor, actionable_move_pct)
+    else:
+        if direction_targets.shape != targets.shape or not np.isin(direction_targets, (0, 1, 2)).all():
+            raise ValueError("direction targets must contain valid aligned classes")
+        classes = torch.from_numpy(direction_targets.astype(np.int64, copy=False))
     weights = []
     for horizon in range(targets.shape[1]):
         counts = torch.bincount(classes[:, horizon], minlength=3).float()
@@ -73,10 +79,17 @@ def direction_loss(
     *,
     actionable_move_pct: float,
     class_weights: torch.Tensor,
+    direction_targets: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if logits.shape != (*targets.shape, 3) or class_weights.shape != (targets.shape[1], 3):
         raise ValueError("direction logits, targets, or class weights have incompatible shapes")
-    classes = direction_classes(targets, actionable_move_pct)
+    classes = (
+        direction_classes(targets, actionable_move_pct)
+        if direction_targets is None
+        else direction_targets.long()
+    )
+    if classes.shape != targets.shape or torch.any((classes < 0) | (classes > 2)):
+        raise ValueError("direction targets contain invalid classes")
     losses = [
         functional.cross_entropy(logits[:, index], classes[:, index], weight=class_weights[index])
         for index in range(targets.shape[1])
@@ -111,9 +124,13 @@ def _run_epoch(
     model.train(training)
     total_loss = 0.0
     total_rows = 0
-    for features, targets in loader:
+    for batch in loader:
+        features, targets = batch[:2]
+        batch_direction_targets = batch[2] if len(batch) == 3 else None
         features = features.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
+        if batch_direction_targets is not None:
+            batch_direction_targets = batch_direction_targets.to(device, non_blocking=True)
         if training:
             optimizer.zero_grad(set_to_none=True)
         with torch.autocast(
@@ -128,6 +145,7 @@ def _run_epoch(
                 targets,
                 actionable_move_pct=config.actionable_move_pct,
                 class_weights=direction_class_weights,
+                direction_targets=batch_direction_targets,
             )
             loss = regression_loss + config.direction_loss_weight * classification_loss
         if training:
@@ -233,7 +251,8 @@ def predict_quantiles(
     predictions = []
     targets = []
     with torch.inference_mode():
-        for features, batch_targets in loader:
+        for batch in loader:
+            features, batch_targets = batch[:2]
             output = ordered_quantiles(
                 target_scaler.inverse_tensor(model(features.to(device, non_blocking=True)))
             )
@@ -248,22 +267,31 @@ def predict_outputs(
     *,
     device: torch.device,
     target_scaler: RobustTargetScaler,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    actionable_move_pct: float = 0.20,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     model.eval()
     predictions = []
     direction_logits = []
     targets = []
+    direction_targets = []
     with torch.inference_mode():
-        for features, batch_targets in loader:
+        for batch in loader:
+            features, batch_targets = batch[:2]
+            batch_direction_targets = batch[2] if len(batch) == 3 else direction_classes(
+                batch_targets,
+                actionable_move_pct,
+            )
             quantiles, logits = model.forward_heads(features.to(device, non_blocking=True))
             output = ordered_quantiles(target_scaler.inverse_tensor(quantiles))
             predictions.append(output.cpu().numpy())
             direction_logits.append(logits.cpu().numpy())
             targets.append(batch_targets.cpu().numpy())
+            direction_targets.append(batch_direction_targets.cpu().numpy())
     return (
         np.concatenate(predictions),
         np.concatenate(direction_logits),
         np.concatenate(targets),
+        np.concatenate(direction_targets),
     )
 
 
@@ -273,13 +301,19 @@ def direction_metrics(
     horizons_minutes: Iterable[int],
     *,
     actionable_move_pct: float,
+    actual_classes: np.ndarray | None = None,
 ) -> dict[str, dict[str, float]]:
     horizons = tuple(horizons_minutes)
     if logits.shape != (len(targets), len(horizons), 3):
         raise ValueError("direction logits do not match targets and horizons")
-    actual = np.ones_like(targets, dtype=np.int8)
-    actual[targets <= -actionable_move_pct] = 0
-    actual[targets >= actionable_move_pct] = 2
+    if actual_classes is None:
+        actual = np.ones_like(targets, dtype=np.int8)
+        actual[targets <= -actionable_move_pct] = 0
+        actual[targets >= actionable_move_pct] = 2
+    else:
+        if actual_classes.shape != targets.shape or not np.isin(actual_classes, (0, 1, 2)).all():
+            raise ValueError("actual direction classes are invalid")
+        actual = actual_classes.astype(np.int8, copy=False)
     predicted = logits.argmax(axis=-1)
     result = {}
     for index, horizon in enumerate(horizons):

@@ -84,6 +84,28 @@ def test_only_observed_rows_with_complete_targets_become_endpoints():
     assert eligible.tolist() == [249, 252]
 
 
+def test_barrier_targets_filter_endpoints_and_flow_through_dataset():
+    rows = 300
+    direction_targets = np.ones((rows, 2), dtype=np.int8)
+    direction_targets[250, 0] = -1
+    data = ArrayMarketData(
+        timestamps=np.arange(rows, dtype=np.int64) * 60 + 1_800_000_000,
+        segment_ids=np.zeros(rows, dtype=np.int64),
+        is_observed=np.ones(rows, dtype=bool),
+        features=np.zeros((rows, len(FEATURE_COLUMNS)), dtype=np.float32),
+        targets=np.zeros((rows, 2), dtype=np.float32),
+        horizons_minutes=(15, 60),
+        direction_targets=direction_targets,
+    )
+
+    eligible = observed_target_indices(data, np.array([249, 250, 251]))
+    dataset = MarketSequenceDataset(data, eligible, sequence_length=240)
+    _, _, labels = dataset[0]
+
+    assert eligible.tolist() == [249, 251]
+    assert labels.tolist() == [1, 1]
+
+
 def test_continuous_segments_ignore_chunk_local_ids_and_follow_time_only():
     timestamps = np.arange(12, dtype=np.int64) * 60 + 1_800_000_000
     timestamps[8:] += 120

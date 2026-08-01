@@ -21,7 +21,7 @@ def main() -> int:
     parser.add_argument("dataset")
     parser.add_argument("--output", required=True)
     parser.add_argument("--horizons", nargs="+", type=int, default=(15, 60))
-    parser.add_argument("--barrier-pct", type=float, default=0.20)
+    parser.add_argument("--barrier-pct", nargs="+", type=float, default=(0.20,))
     args = parser.parse_args()
 
     source = Path(args.dataset).resolve()
@@ -37,6 +37,11 @@ def main() -> int:
             "is_observed": "boolean",
         },
     ).sort_values("timestamp").drop_duplicates("timestamp", keep="last")
+    barrier_pcts = tuple(args.barrier_pct)
+    if len(barrier_pcts) == 1:
+        barrier_pcts *= len(args.horizons)
+    if len(barrier_pcts) != len(args.horizons):
+        parser.error("--barrier-pct must contain one value or one value per horizon")
     targets = first_touch_barrier_targets(
         frame["timestamp"].to_numpy(dtype=np.int64),
         frame["high"].to_numpy(dtype=np.float64),
@@ -44,7 +49,7 @@ def main() -> int:
         frame["close"].to_numpy(dtype=np.float64),
         frame["is_observed"].to_numpy(dtype=bool),
         args.horizons,
-        barrier_pct=args.barrier_pct,
+        barrier_pct=barrier_pcts,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
@@ -54,7 +59,7 @@ def main() -> int:
             timestamps=targets.timestamps,
             labels=targets.labels,
             horizons_minutes=np.asarray(targets.horizons_minutes, dtype=np.int16),
-            barrier_pct=np.asarray([targets.barrier_pct], dtype=np.float32),
+            barrier_pcts=np.asarray(targets.barrier_pcts, dtype=np.float32),
             source_sha256=np.asarray([sha256_file(source)]),
         )
     os.replace(temporary, output)
