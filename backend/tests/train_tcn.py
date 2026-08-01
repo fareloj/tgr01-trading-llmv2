@@ -36,9 +36,11 @@ from backend.ml.sequences import (
 from backend.ml.tcn import QuantileTCN, TCNConfig
 from backend.ml.training import (
     StageConfig,
+    apply_direction_temperatures,
     direction_metrics,
     fit_stage,
     fit_direction_class_weights,
+    fit_direction_temperatures,
     predict_outputs,
     predict_quantiles,
     quantile_metrics,
@@ -486,6 +488,21 @@ def main() -> int:
         target_scaler=target_scaler,
         direction_class_weights=local_direction_weights,
     )
+    (
+        _,
+        validation_direction_logits,
+        _,
+        validation_direction_targets,
+    ) = predict_outputs(
+        model,
+        local_validation,
+        device=device,
+        target_scaler=target_scaler,
+    )
+    direction_temperatures = fit_direction_temperatures(
+        validation_direction_logits,
+        validation_direction_targets,
+    )
     calibration_loader = _loader(
         local_data,
         local_indices["calibration"],
@@ -512,6 +529,13 @@ def main() -> int:
         HORIZONS,
     )
     calibration_direction_metrics = direction_metrics(
+        apply_direction_temperatures(calibration_direction_logits, direction_temperatures),
+        calibration_targets,
+        HORIZONS,
+        actionable_move_pct=0.20,
+        actual_classes=calibration_direction_targets,
+    )
+    calibration_direction_metrics_uncalibrated = direction_metrics(
         calibration_direction_logits,
         calibration_targets,
         HORIZONS,
@@ -528,8 +552,10 @@ def main() -> int:
         "local_sequences": {name: len(value) for name, value in local_indices.items()},
         "local_history": local_history,
         "local_direction_class_weights": local_direction_weights.tolist(),
+        "direction_temperatures": direction_temperatures.tolist(),
         "calibration_quantile_metrics": calibration_quantile_metrics,
         "calibration_direction_metrics": calibration_direction_metrics,
+        "calibration_direction_metrics_uncalibrated": calibration_direction_metrics_uncalibrated,
         "test_evaluated": bool(args.evaluate_test),
         "boundary": (
             "Offline research checkpoint only. It cannot place paper or live orders and remains "

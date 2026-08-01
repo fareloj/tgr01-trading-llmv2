@@ -315,6 +315,9 @@ def direction_metrics(
             raise ValueError("actual direction classes are invalid")
         actual = actual_classes.astype(np.int8, copy=False)
     predicted = logits.argmax(axis=-1)
+    shifted = logits - logits.max(axis=-1, keepdims=True)
+    probabilities = np.exp(shifted)
+    probabilities /= probabilities.sum(axis=-1, keepdims=True)
     result = {}
     for index, horizon in enumerate(horizons):
         recalls = []
@@ -329,6 +332,18 @@ def direction_metrics(
             recalls.append(recall)
             precisions.append(precision)
             f1_scores.append(2 * precision * recall / (precision + recall) if precision + recall else 0.0)
+        row_probabilities = probabilities[:, index]
+        confidence = row_probabilities.max(axis=1)
+        correctness = predicted[:, index] == actual[:, index]
+        one_hot = np.eye(3, dtype=np.float64)[actual[:, index]]
+        expected_calibration_error = 0.0
+        for lower in np.linspace(0.0, 0.9, 10):
+            upper = lower + 0.1
+            mask = (confidence > lower) & (confidence <= upper)
+            if mask.any():
+                expected_calibration_error += float(mask.mean()) * abs(
+                    float(correctness[mask].mean()) - float(confidence[mask].mean())
+                )
         result[f"{horizon}m"] = {
             "accuracy": float(np.mean(predicted[:, index] == actual[:, index])),
             "balanced_accuracy": float(np.mean(recalls)),
@@ -342,8 +357,45 @@ def direction_metrics(
             "hold_recall": float(recalls[1]),
             "buy_precision": float(precisions[2]),
             "buy_recall": float(recalls[2]),
+            "negative_log_likelihood": float(
+                -np.log(np.clip(row_probabilities[np.arange(len(actual)), actual[:, index]], 1e-12, 1.0)).mean()
+            ),
+            "multiclass_brier": float(np.square(row_probabilities - one_hot).sum(axis=1).mean()),
+            "expected_calibration_error": expected_calibration_error,
         }
     return result
+
+
+def fit_direction_temperatures(
+    logits: np.ndarray,
+    actual_classes: np.ndarray,
+) -> np.ndarray:
+    if logits.ndim != 3 or logits.shape[:2] != actual_classes.shape or logits.shape[2] != 3:
+        raise ValueError("temperature calibration arrays have incompatible shapes")
+    if not np.isin(actual_classes, (0, 1, 2)).all():
+        raise ValueError("temperature calibration classes are invalid")
+    candidates = np.geomspace(0.25, 4.0, 121)
+    temperatures = []
+    rows = np.arange(len(logits))
+    for horizon in range(logits.shape[1]):
+        horizon_logits = logits[:, horizon]
+        labels = actual_classes[:, horizon]
+        losses = []
+        for temperature in candidates:
+            scaled = horizon_logits / temperature
+            shifted = scaled - scaled.max(axis=1, keepdims=True)
+            log_sum_exp = np.log(np.exp(shifted).sum(axis=1))
+            losses.append(float(np.mean(log_sum_exp - shifted[rows, labels])))
+        temperatures.append(float(candidates[int(np.argmin(losses))]))
+    return np.asarray(temperatures, dtype=np.float32)
+
+
+def apply_direction_temperatures(logits: np.ndarray, temperatures: np.ndarray) -> np.ndarray:
+    if logits.ndim != 3 or temperatures.shape != (logits.shape[1],):
+        raise ValueError("temperature scaling shapes are incompatible")
+    if np.any(~np.isfinite(temperatures)) or np.any(temperatures <= 0):
+        raise ValueError("temperatures must be finite and positive")
+    return logits / temperatures.reshape(1, -1, 1)
 
 
 def quantile_metrics(

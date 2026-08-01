@@ -21,10 +21,12 @@ from backend.ml.sequences import (
 )
 from backend.ml.tcn import CausalConv1d, QuantileTCN, TCNConfig, quantile_loss
 from backend.ml.training import (
+    apply_direction_temperatures,
     direction_classes,
     direction_loss,
     direction_metrics,
     fit_direction_class_weights,
+    fit_direction_temperatures,
     predict_quantiles,
 )
 
@@ -230,6 +232,40 @@ def test_direction_metrics_expose_hold_baseline_and_balanced_score():
     assert metrics["balanced_accuracy"] == 1.0
     assert metrics["macro_f1"] == 1.0
     assert metrics["always_hold_accuracy"] == 1 / 3
+
+
+def test_temperature_scaling_reduces_overconfident_nll():
+    logits = np.array(
+        [
+            [[8.0, 0.0, 0.0]],
+            [[0.0, 8.0, 0.0]],
+            [[0.0, 0.0, 8.0]],
+            [[8.0, 0.0, 0.0]],
+        ],
+        dtype=np.float32,
+    )
+    actual = np.array([[0], [1], [2], [1]], dtype=np.int8)
+    returns = np.zeros((4, 1), dtype=np.float32)
+    before = direction_metrics(
+        logits,
+        returns,
+        (15,),
+        actionable_move_pct=0.2,
+        actual_classes=actual,
+    )["15m"]
+
+    temperatures = fit_direction_temperatures(logits, actual)
+    calibrated = apply_direction_temperatures(logits, temperatures)
+    after = direction_metrics(
+        calibrated,
+        returns,
+        (15,),
+        actionable_move_pct=0.2,
+        actual_classes=actual,
+    )["15m"]
+
+    assert temperatures[0] > 1.0
+    assert after["negative_log_likelihood"] < before["negative_log_likelihood"]
 
 
 def test_device_batcher_matches_host_dataset_when_cuda_is_available():
