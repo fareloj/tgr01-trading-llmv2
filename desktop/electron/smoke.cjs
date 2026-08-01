@@ -17,7 +17,7 @@ const smokeState = {
   latest_kline: { close: 400000, age_seconds: 30 },
   latest_news: { source: "smoke", age_seconds: 60, headline: "Smoke test headline" },
   clock: { status: "OK", skew_seconds: 0.1 },
-  portfolio: { equity_brl: 10000, exposure_pct: 5 },
+  portfolio: { equity_brl: 9850, exposure_pct: 5, daily_reference_equity_brl: 10000, daily_drawdown_pct: 1.5, daily_drawdown_limit_pct: 10 },
   position: { quantity: 0.001, avg_cost_brl: 390000, reconciliation: { method: "smoke" } },
   rag: { documents: 1, chunks: 2 },
   external_rag: { status: "ready", dense_indexed: 2, lexical_indexed: 2 },
@@ -35,7 +35,7 @@ const smokeState = {
   }],
   entry_evaluation: {
     entries: [
-      { id: 1, kind: "approved", action: "BUY", timestamp: 1780000000, execution_price: 399000, technical: {}, horizons: {} },
+      { id: 1, kind: "approved", action: "BUY", timestamp: 1780000000, execution_price: 399000, technical: {}, horizons: { "5": { status: "data_gap" } } },
       { id: 2, kind: "blocked", action: "HOLD", timestamp: 1780000030, execution_price: 400000, technical: {}, horizons: {} }
     ]
   }
@@ -75,6 +75,7 @@ async function runSmokeTest() {
     approved.click();
     await wait(25);
     const approvedRows = document.querySelectorAll('tbody tr').length;
+    const hasDataGap = [...document.querySelectorAll('.future.gap')].some(node => node.textContent.trim() === 'DATA GAP');
     const checkbox60 = document.querySelector('[data-horizon="60"]');
     if (!checkbox60) throw new Error('missing 60m checkbox');
     checkbox60.click();
@@ -112,6 +113,7 @@ async function runSmokeTest() {
       navButtons: document.querySelectorAll('nav button').length,
       actionButtons: document.querySelectorAll('.ops-footer button').length,
       approvedRows,
+      hasDataGap,
       has60Header,
       activeNavigation: document.querySelector('nav button.active')?.textContent.trim(),
       diagnosticsEnabled: !diagnostics.disabled,
@@ -134,6 +136,7 @@ async function runSmokeTest() {
   if (result.navButtons !== 6) failures.push(`navButtons=${result.navButtons}`);
   if (result.actionButtons < 10) failures.push(`actionButtons=${result.actionButtons}`);
   if (result.approvedRows !== 1) failures.push(`approvedRows=${result.approvedRows}`);
+  if (!result.hasDataGap) failures.push("data_gap evaluation not rendered explicitly");
   if (result.has60Header) failures.push("60m header remained after uncheck");
   if (result.activeNavigation !== "Operations") failures.push(`activeNavigation=${result.activeNavigation}`);
   if (!result.diagnosticsEnabled) failures.push("diagnostics disabled in Electron");

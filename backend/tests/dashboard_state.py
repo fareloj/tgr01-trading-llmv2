@@ -14,6 +14,7 @@ if str(PROJECT_DIR) not in sys.path:
 
 from backend.core import database
 from backend.core.db_models import (
+    equity_snapshots,
     klines,
     news,
     paper_position_reconciliations,
@@ -26,7 +27,10 @@ from backend.core.db_models import (
     virtual_portfolio,
 )
 from backend.core.clock_sync import check_clock_skew
+from backend.core.runtime_safety import MAX_FUTURE_HEARTBEAT_SECONDS, REQUIRED_WORKERS
 from backend.rag.external_client import ExternalRagClient
+from backend.risk.portfolio_guard import trading_day_start
+from backend.risk.risk_manager import RiskManager
 
 
 def get_external_rag_health() -> dict:
@@ -59,19 +63,28 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
     """Build the UI state from the same PostgreSQL database used by the pipeline."""
     now = int(time.time())
     with database.engine.connect() as conn:
-        worker_rows = conn.execute(
+        worker_rows = list(conn.execute(
             select(system_health.c.worker_name, system_health.c.last_heartbeat).order_by(
                 system_health.c.worker_name
             )
-        )
+        ))
+        worker_map = {row.worker_name: int(row.last_heartbeat) for row in worker_rows}
         workers = {}
-        for row in worker_rows:
-            age = now - int(row.last_heartbeat)
-            limit = 300 if row.worker_name == "price_worker" else 3600
-            workers[row.worker_name] = {
-                "last_heartbeat": int(row.last_heartbeat),
+        for worker_name, limit in REQUIRED_WORKERS.items():
+            heartbeat = worker_map.get(worker_name)
+            age = now - heartbeat if heartbeat is not None else None
+            if heartbeat is None:
+                status = "missing"
+            elif age < -MAX_FUTURE_HEARTBEAT_SECONDS:
+                status = "future"
+            elif age > limit:
+                status = "stale"
+            else:
+                status = "healthy"
+            workers[worker_name] = {
+                "last_heartbeat": heartbeat,
                 "age_seconds": age,
-                "status": "healthy" if age <= limit else "stale",
+                "status": status,
             }
 
         latest_kline = conn.execute(
@@ -91,6 +104,27 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
                 select(virtual_portfolio.c.currency, virtual_portfolio.c.amount)
             )
         }
+        day_start = trading_day_start(now)
+        first_equity_snapshot = conn.execute(
+            select(equity_snapshots)
+            .where(
+                equity_snapshots.c.asset == "BTC/BRL",
+                equity_snapshots.c.timestamp >= day_start,
+                equity_snapshots.c.timestamp <= now,
+            )
+            .order_by(equity_snapshots.c.timestamp.asc(), equity_snapshots.c.id.asc())
+            .limit(1)
+        ).mappings().first()
+        latest_equity_snapshot = conn.execute(
+            select(equity_snapshots)
+            .where(
+                equity_snapshots.c.asset == "BTC/BRL",
+                equity_snapshots.c.timestamp >= day_start,
+                equity_snapshots.c.timestamp <= now,
+            )
+            .order_by(equity_snapshots.c.timestamp.desc(), equity_snapshots.c.id.desc())
+            .limit(1)
+        ).mappings().first()
         position_row = conn.execute(
             select(paper_position_state).where(paper_position_state.c.asset == "BTC/BRL")
         ).mappings().first()
@@ -121,6 +155,12 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
     latest_price = float(latest_kline.close) if latest_kline else 0.0
     equity = portfolio.get("BRL", 0.0) + portfolio.get("BTC", 0.0) * latest_price
     exposure = (portfolio.get("BTC", 0.0) * latest_price / equity * 100.0) if equity else 0.0
+    daily_reference_equity = (
+        float(first_equity_snapshot["equity_brl"]) if first_equity_snapshot else None
+    )
+    daily_drawdown = None
+    if daily_reference_equity and equity > 0:
+        daily_drawdown = max(0.0, ((daily_reference_equity - equity) / daily_reference_equity) * 100.0)
     clock = check_clock_skew(timeout=2.0)
     reports = []
     if REPORTS_DIR.exists():
@@ -168,6 +208,12 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
             "btc": portfolio.get("BTC", 0.0),
             "equity_brl": round(equity, 2),
             "exposure_pct": round(exposure, 2),
+            "daily_reference_equity_brl": round(daily_reference_equity, 2) if daily_reference_equity else None,
+            "daily_drawdown_pct": round(daily_drawdown, 4) if daily_drawdown is not None else None,
+            "daily_drawdown_limit_pct": RiskManager().max_daily_drawdown,
+            "equity_snapshot_timestamp": (
+                int(latest_equity_snapshot["timestamp"]) if latest_equity_snapshot else None
+            ),
         },
         "position": position,
         "rag": rag,

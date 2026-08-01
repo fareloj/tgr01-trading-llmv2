@@ -91,7 +91,7 @@ class TradingOpsTui(App):
                 yield Static("NEWS WORKER\n--", classes="metric", id="news")
                 yield Static("CANDLE\n--", classes="metric", id="candle")
                 yield Static("CLOCK SKEW\n--", classes="metric", id="clock")
-                yield Static("EXPOSICAO\n--", classes="metric", id="exposure")
+                yield Static("PAPER RISK\n--", classes="metric", id="exposure")
                 yield Static("RAG MEMORY\n--", classes="metric", id="rag")
             with Vertical(id="actions"):
                 for row_index, row in enumerate(TUI_ACTION_ROWS):
@@ -157,7 +157,13 @@ class TradingOpsTui(App):
         self.query_one("#news", Static).update(f"NEWS WORKER\n{news.get('status', '--')} | {age(news.get('age_seconds'))}")
         self.query_one("#candle", Static).update(f"CANDLE BTC/BRL\nR$ {kline.get('close', 0):,.0f} | {age(kline.get('age_seconds'))}")
         self.query_one("#clock", Static).update(f"CLOCK SKEW\n{clock.get('skew_seconds', '--')}s | {clock.get('status', '--')}")
-        self.query_one("#exposure", Static).update(f"EXPOSICAO PAPER\n{portfolio.get('exposure_pct', 0)}% | R$ {portfolio.get('equity_brl', 0):,.2f}")
+        drawdown = portfolio.get("daily_drawdown_pct")
+        drawdown_label = "--" if drawdown is None else f"{drawdown:.2f}%"
+        self.query_one("#exposure", Static).update(
+            "PAPER RISK\n"
+            f"DD {drawdown_label} | Exp {portfolio.get('exposure_pct', 0):.2f}% | "
+            f"R$ {portfolio.get('equity_brl', 0):,.2f}"
+        )
         self.query_one("#rag", Static).update(f"RAG MEMORY\n{rag.get('documents', 0)} docs | {rag.get('chunks', 0)} chunks")
         self.query_one("#status", Static).update(
             f"[green]Estado atualizado[/green] | DB {state.get('db_path')} | Use Preflight antes de paper trading."

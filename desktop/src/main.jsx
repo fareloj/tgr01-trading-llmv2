@@ -20,7 +20,7 @@ const previewState = {
     headline: "Japan's ruling party supports crypto ETF trading, yen-based stablecoins"
   },
   clock: { status: "OK", skew_seconds: 0.42, max_skew_seconds: 300 },
-  portfolio: { equity_brl: 9840.63, exposure_pct: 18.63 },
+  portfolio: { equity_brl: 9840.63, exposure_pct: 18.63, daily_reference_equity_brl: 10000, daily_drawdown_pct: 1.5937, daily_drawdown_limit_pct: 10 },
   position: { quantity: 0.00509823, avg_cost_brl: 390888.51, realized_pnl_brl: 0, reconciliation: { method: "legacy_trade_log_replay_v1" } },
   rag: { documents: 67, chunks: 122, retrievals: 1 },
   external_rag: { status: "ready", reachable: true, dense_indexed: 833, lexical_indexed: 833, reranker_device: "cuda" },
@@ -88,6 +88,7 @@ function MetricCard({ title, children }) {
 function HorizonCell({ result, blocked }) {
   if (blocked) return <span className="future cooldown">COOLDOWN</span>;
   if (!result || result.status === "not_matured") return <span className="future open">OPEN</span>;
+  if (result.status === "data_gap") return <span className="future gap">DATA GAP</span>;
   const tone = result.status === "good" ? "hit" : result.status === "bad" ? "miss" : "open";
   return <span className={`future ${tone}`}>{result.status.toUpperCase()} {result.move_pct > 0 ? "+" : ""}{result.move_pct}%</span>;
 }
@@ -180,6 +181,7 @@ function App() {
   const technical = snapshot.technical || {};
   const dataHealth = snapshot.data_health || {};
   const newsRisk = snapshot.news_risk || {};
+  const portfolioRisk = snapshot.portfolio || state.portfolio || {};
   const entries = state.entry_evaluation?.entries?.slice(-8).reverse() || [];
   const displayEntries = entries.length ? entries : (state.logs || []).slice(0, 8).map(log => ({
     ...log, kind: log.action === "BUY" || log.action === "SELL" ? "approved" : log.llm_action === "BUY" || log.llm_action === "SELL" ? "blocked" : "observed",
@@ -230,6 +232,7 @@ function App() {
         <MetricCard title="Latest Candle (BTC/BRL 1m)"><h3>{money(state.latest_kline?.close)} <small>BRL</small></h3><span>Age</span><p className="good">{seconds(state.latest_kline?.age_seconds)} ago</p></MetricCard>
         <MetricCard title={`Latest News (${state.latest_news?.source || "--"})`}><p className="headline">{state.latest_news?.headline || "Nenhuma notícia"}</p><span>Age</span><p className="good">{seconds(state.latest_news?.age_seconds)} ago</p></MetricCard>
         <MetricCard title="Paper Position"><h3>{money(state.position?.avg_cost_brl)} <small>BRL avg</small></h3><span>Quantity / provenance</span><p>{Number(state.position?.quantity || 0).toFixed(8)} BTC · {state.position?.reconciliation?.method || "native paper"}</p></MetricCard>
+        <MetricCard title="Daily Paper Risk"><h3 className={(state.portfolio?.daily_drawdown_pct || 0) >= (state.portfolio?.daily_drawdown_limit_pct || 10) ? "bad" : "good"}>{state.portfolio?.daily_drawdown_pct == null ? "--" : `${state.portfolio.daily_drawdown_pct.toFixed(2)}%`}</h3><span>Equity / BTC exposure</span><p>R$ {money(state.portfolio?.equity_brl)} · {Number(state.portfolio?.exposure_pct || 0).toFixed(2)}%</p></MetricCard>
       </section>
 
       <section className="primary-grid">
@@ -271,6 +274,8 @@ function App() {
             <div><small>Fee / Slippage</small><strong>{latest.fee_brl ? `R$ ${money(latest.fee_brl)}` : "--"}</strong><em>{latest.slippage_rate != null ? `${(latest.slippage_rate * 100).toFixed(3)}%` : "--"}</em></div>
             <div><small>Equity Delta</small><strong className={(latest.equity_after_brl || 0) >= (latest.equity_before_brl || 0) ? "good" : "bad"}>{latest.equity_after_brl && latest.equity_before_brl ? money(latest.equity_after_brl - latest.equity_before_brl) : "--"}</strong><em>BRL</em></div>
             <div><small>Realized PnL</small><strong className={(latest.realized_pnl_brl || 0) >= 0 ? "good" : "bad"}>{latest.realized_pnl_brl != null ? money(latest.realized_pnl_brl) : "--"}</strong><em>BRL</em></div>
+            <div><small>Daily Drawdown</small><strong className={(portfolioRisk.daily_drawdown_percentage ?? state.portfolio?.daily_drawdown_pct ?? 0) >= (portfolioRisk.daily_drawdown_limit_percentage ?? state.portfolio?.daily_drawdown_limit_pct ?? 10) ? "bad" : "good"}>{portfolioRisk.daily_drawdown_percentage == null && state.portfolio?.daily_drawdown_pct == null ? "--" : `${Number(portfolioRisk.daily_drawdown_percentage ?? state.portfolio?.daily_drawdown_pct).toFixed(2)}%`}</strong><em>limit {Number(portfolioRisk.daily_drawdown_limit_percentage ?? state.portfolio?.daily_drawdown_limit_pct ?? 10).toFixed(2)}%</em></div>
+            <div><small>Marked Equity</small><strong>{money(portfolioRisk.equity_brl ?? state.portfolio?.equity_brl)}</strong><em>BRL</em></div>
           </div>
           <footer>Snapshot ID: {latest.id || "--"} <span>kline_age: {seconds(dataHealth.kline_age_seconds)} · news_age: {seconds(dataHealth.news_age_seconds)}</span></footer>
         </article>
@@ -304,7 +309,7 @@ function App() {
             </tr>;
           })}</tbody>
         </table>
-        <footer><span>Showing {filteredEntries.length} evaluated decisions</span><span className="legend"><b className="hit">HIT</b><b className="open">OPEN</b><b className="cooldown">COOLDOWN</b></span></footer>
+        <footer><span>Showing {filteredEntries.length} evaluated decisions</span><span className="legend"><b className="hit">HIT</b><b className="open">OPEN</b><b className="gap">DATA GAP</b><b className="cooldown">COOLDOWN</b></span></footer>
       </section>
 
       <section className="ops-footer" id="settings">

@@ -45,7 +45,11 @@ def test_tui_mounts_actions_routes_clicks_and_renders_state():
                     },
                     "latest_kline": {"close": 400000.0, "age_seconds": 4},
                     "clock": {"skew_seconds": 1, "status": "OK"},
-                    "portfolio": {"exposure_pct": 5.0, "equity_brl": 10000.0},
+                    "portfolio": {
+                        "exposure_pct": 5.0,
+                        "equity_brl": 10000.0,
+                        "daily_drawdown_pct": 1.25,
+                    },
                     "rag": {"documents": 10, "chunks": 20},
                     "logs": [
                         {
@@ -61,5 +65,6 @@ def test_tui_mounts_actions_routes_clicks_and_renders_state():
             )
             assert app.query_one("#recent", DataTable).row_count == 1
             assert "paper.db" in str(app.query_one("#status", Static).render())
+            assert "DD 1.25%" in str(app.query_one("#exposure", Static).render())
 
     asyncio.run(exercise())

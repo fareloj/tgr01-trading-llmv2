@@ -3,6 +3,7 @@ import time
 
 from backend.core import database
 from backend.core.db_models import (
+    equity_snapshots,
     klines,
     paper_position_reconciliations,
     paper_position_state,
@@ -94,6 +95,17 @@ def test_dashboard_state_counts_rag_and_reports(tmp_path, monkeypatch):
             )
         )
         conn.execute(
+            equity_snapshots.insert().values(
+                timestamp=now,
+                asset="BTC/BRL",
+                mark_price=100,
+                brl_balance=10000,
+                btc_balance=0,
+                equity_brl=10000,
+                source="pytest",
+            )
+        )
+        conn.execute(
             paper_position_reconciliations.insert().values(
                 asset="BTC/BRL",
                 timestamp=now,
@@ -122,6 +134,8 @@ def test_dashboard_state_counts_rag_and_reports(tmp_path, monkeypatch):
     assert state["rag"] == {"documents": 1, "chunks": 1, "retrievals": 1}
     assert state["reports"][0]["name"] == "report.json"
     assert state["position"]["avg_cost_brl"] == 90000
+    assert state["portfolio"]["daily_reference_equity_brl"] == 10000
+    assert state["portfolio"]["daily_drawdown_pct"] == 0
     assert state["position"]["reconciliation"] == {
         "id": 1,
         "timestamp": now,

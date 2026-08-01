@@ -143,6 +143,13 @@ def test_runtime_without_llm_key_audits_hold_and_aborts(monkeypatch):
     monkeypatch.setattr(trading_main, "has_llm_api_key", lambda: False)
     monkeypatch.setattr(
         trading_main,
+        "enrich_payload_with_daily_equity",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("equity snapshot must not be captured without an LLM key")
+        ),
+    )
+    monkeypatch.setattr(
+        trading_main,
         "audit_hold_without_llm",
         lambda received_payload, reason: audited.append((received_payload, reason)),
     )
@@ -151,6 +158,40 @@ def test_runtime_without_llm_key_audits_hold_and_aborts(monkeypatch):
 
     assert completed is False
     assert audited == [(payload, "Pre-LLM abort: nenhuma chave LLM configurada.")]
+
+
+def test_runtime_does_not_capture_equity_from_stale_market_price(monkeypatch):
+    payload = _compatible_payload()
+    payload["data_health"].update(
+        {
+            "is_market_data_stale": True,
+            "kline_age_seconds": 900,
+            "market_data_stale_threshold_seconds": 300,
+        }
+    )
+    audited = []
+    monkeypatch.setattr(trading_main, "init_db", lambda: None)
+    monkeypatch.setattr(trading_main, "print_db_diagnostics", lambda: None)
+    monkeypatch.setattr(trading_main, "_workers_are_healthy", lambda: True)
+    monkeypatch.setattr(trading_main, "build_agent_payload", lambda: payload)
+    monkeypatch.setattr(
+        trading_main,
+        "enrich_payload_with_daily_equity",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("stale market price cannot establish the daily equity baseline")
+        ),
+    )
+    monkeypatch.setattr(
+        trading_main,
+        "audit_hold_without_llm",
+        lambda received_payload, reason: audited.append((received_payload, reason)),
+    )
+
+    completed = trading_main.run_trading_cycle()
+
+    assert completed is False
+    assert len(audited) == 1
+    assert audited[0][1].startswith("Pre-LLM abort: market data stale")
 
 
 def test_risk_manager_blocks_low_reliability_buy():

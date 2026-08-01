@@ -77,15 +77,6 @@ def run_trading_cycle():
         return False
 
     current_price = payload["technical_context"]["current_price"]
-    rm = RiskManager(max_exposure=80.0)
-    try:
-        enrich_payload_with_daily_equity(payload, max_daily_drawdown=rm.max_daily_drawdown)
-    except (RuntimeError, ValueError) as error:
-        reason = f"Pre-LLM abort: estado de capital paper invalido ({error})."
-        print(f"[!] {reason}")
-        audit_hold_without_llm(payload, reason)
-        print("=" * 60 + "\n")
-        return False
     print(f"      -> Preco Atual: R${current_price:.2f}")
     data_health = payload.get("data_health", {})
     print(
@@ -112,6 +103,16 @@ def run_trading_cycle():
         reason = "Pre-LLM abort: nenhuma chave LLM configurada."
         print(f"[!] {reason}")
         print("      -> HOLD tecnico auditado; mocks nao participam do runtime.")
+        audit_hold_without_llm(payload, reason)
+        print("=" * 60 + "\n")
+        return False
+
+    rm = RiskManager(max_exposure=80.0)
+    try:
+        enrich_payload_with_daily_equity(payload, max_daily_drawdown=rm.max_daily_drawdown)
+    except (RuntimeError, ValueError) as error:
+        reason = f"Pre-LLM abort: estado de capital paper invalido ({error})."
+        print(f"[!] {reason}")
         audit_hold_without_llm(payload, reason)
         print("=" * 60 + "\n")
         return False
