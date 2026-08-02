@@ -3,6 +3,8 @@ const fs = require("fs");
 const path = require("path");
 const { ACTIONS } = require("./operations.cjs");
 
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch("disable-gpu");
 
 const PROJECT_DIR = path.resolve(__dirname, "..", "..");
 const SCREENSHOT_PATH = path.join(PROJECT_DIR, "backend", "reports", "electron-smoke.png");

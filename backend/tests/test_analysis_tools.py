@@ -14,6 +14,11 @@ from backend.analysis.tool_engine import DeterministicToolEngine
 from backend.core import repository
 
 
+def _offline_agent(monkeypatch) -> DecisionAgent:
+    monkeypatch.setenv("GROQ_API_KEY", "unit-test-key")
+    return DecisionAgent()
+
+
 def _frame(count: int = 300, *, start: float = 100.0, step: float = 0.2) -> pd.DataFrame:
     rows = []
     for index in range(count):
@@ -208,7 +213,7 @@ def test_audit_storage_failure_does_not_break_read_only_calculation(monkeypatch)
 
 
 def test_agent_returns_tool_outputs_to_final_decision_without_executing_text(monkeypatch):
-    agent = DecisionAgent()
+    agent = _offline_agent(monkeypatch)
     plan = AnalysisPlan.model_validate(
         {"requests": [{"tool": "donchian_breakout", "lookback_candles": 20}], "rationale": "Confirmar canal."}
     )
@@ -253,8 +258,8 @@ class _FakeCompletions:
         return _FakeResponse(self.content)
 
 
-def test_llm_planner_accepts_only_the_allowlisted_contract():
-    agent = DecisionAgent()
+def test_llm_planner_accepts_only_the_allowlisted_contract(monkeypatch):
+    agent = _offline_agent(monkeypatch)
     agent.client = type(
         "Client",
         (),
@@ -270,8 +275,8 @@ def test_llm_planner_accepts_only_the_allowlisted_contract():
     assert plan.requests[0].tool == "donchian_breakout"
 
 
-def test_llm_planner_converts_a_hostile_unknown_tool_into_empty_failure_plan():
-    agent = DecisionAgent()
+def test_llm_planner_converts_a_hostile_unknown_tool_into_empty_failure_plan(monkeypatch):
+    agent = _offline_agent(monkeypatch)
     agent.client = type(
         "Client",
         (),
