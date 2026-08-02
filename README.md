@@ -1,7 +1,7 @@
 # TGR-01 Trading LLM V2
 
-[![CI](https://github.com/fareloj/tgr01-trading-llmv2/actions/workflows/ci.yml/badge.svg)](https://github.com/fareloj/tgr01-trading-llmv2/actions/workflows/ci.yml)
-[![Official RAG CI](https://github.com/fareloj/hybrid-rag-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/fareloj/hybrid-rag-engine/actions/workflows/ci.yml)
+[![Trading CI](https://img.shields.io/github/actions/workflow/status/fareloj/tgr01-trading-llmv2/ci.yml?branch=main&label=Trading%20CI)](https://github.com/fareloj/tgr01-trading-llmv2/actions/workflows/ci.yml)
+[![RAG CI](https://img.shields.io/github/actions/workflow/status/fareloj/hybrid-rag-engine/ci.yml?branch=main&label=RAG%20CI)](https://github.com/fareloj/hybrid-rag-engine/actions/workflows/ci.yml)
 
 TGR-01 is a local BTC/BRL paper-trading research system. It combines public
 market data, recent news, deterministic indicators, an LLM decision agent, a
