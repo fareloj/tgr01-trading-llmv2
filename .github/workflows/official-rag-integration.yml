@@ -28,19 +28,19 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Check out TGR-01
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: tgr01
 
       - name: Check out official Hybrid RAG Engine
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fareloj/hybrid-rag-engine
           ref: ${{ inputs.rag_ref }}
           path: hybrid-rag
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
