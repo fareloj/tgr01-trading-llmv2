@@ -16,7 +16,8 @@ invoked only through the explicit offline inspection command.
 - The cost-aware policy produced no executable trades.
 
 Generated datasets and checkpoints remain ignored under `backend/reports`.
-The experiment ledger is in `tcn_neural_research_report.md`.
+The experiment ledger is in the
+[TCN research report](../../docs/research/tcn_neural_research_report.md).
 
 ## Reopening Criteria
 

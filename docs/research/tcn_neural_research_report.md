@@ -1,7 +1,8 @@
 # TCN Neural Research Report
 
 > **Archived:** this experiment is frozen and excluded from every active
-> trading path. See `backend/ml/ARCHIVED.md` for the reopening criteria.
+> trading path. See the [archive boundary](../../backend/ml/ARCHIVED.md) for
+> the reopening criteria.
 
 ## Purpose
 

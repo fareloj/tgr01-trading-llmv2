@@ -16,10 +16,9 @@ from backend.rag.rag_store import init_rag_tables, upsert_document
 
 DEFAULT_PROJECT_DOCS = [
     ("README.md", "architecture_note"),
-    ("project_super_summary.md", "architecture_note"),
-    ("crypto_study_plan_for_tgr01.md", "study_note"),
-    ("rag_agent_context_design.md", "architecture_note"),
-    ("final_architecture_review.md", "architecture_note"),
+    ("docs/reports/FINAL_ACCEPTANCE.md", "validation_report"),
+    ("docs/research/btc_trading_tools_research.md", "research_note"),
+    ("backend/ml/ARCHIVED.md", "research_status"),
 ]
 
 
@@ -72,7 +71,11 @@ def ingest_recent_news(hours: int, limit: int, dry_run: bool) -> list[int]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ingest curated local sources into the optional RAG store.")
-    parser.add_argument("--project-docs", action="store_true", help="Ingest README, study plan and architecture notes.")
+    parser.add_argument(
+        "--project-docs",
+        action="store_true",
+        help="Ingest the curated README, acceptance, trading research, and ML status documents.",
+    )
     parser.add_argument("--markdown", action="append", default=[], help="Specific markdown/text file to ingest.")
     parser.add_argument("--source-type", default="study_note", help="Source type for --markdown files.")
     parser.add_argument("--news-hours", type=int, default=0, help="Ingest news from the last N hours.")
