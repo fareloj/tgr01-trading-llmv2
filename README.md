@@ -172,7 +172,7 @@ py -3.11 .\backend\tests\query_decision_memory.py --current-payload --limit 5
 
 ### External hybrid RAG
 
-The larger hybrid RAG is a separate Docker project. Its service code is **not
+[The hybrid RAG engine](https://github.com/fareloj/hybrid-rag-engine) is a separate Docker project. Its service code is **not
 part of this repository**. TGR-01 contains only the HTTP client, safety filters,
 health/query utilities, and a Compose override that mounts this repository
 read-only for ingestion.
@@ -329,7 +329,7 @@ dependencies are ignored by Git.
 - News red flags are lexical heuristics and can produce false positives.
 - Public APIs and RSS feeds can be delayed, unavailable, or structurally
   inconsistent; the safe response is to stop or hold.
-- The optional RAG improves retrieval, not price prediction.
+- The optional [RAG](https://github.com/fareloj/hybrid-rag-engine) improves retrieval, not price prediction.
 - There is no real-order endpoint, fill reconciliation, exchange balance source
   of truth, or production incident process.
 
