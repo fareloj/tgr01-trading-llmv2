@@ -1,5 +1,8 @@
 # TGR-01 Trading LLM V2
 
+[![CI](https://github.com/fareloj/tgr01-trading-llmv2/actions/workflows/ci.yml/badge.svg)](https://github.com/fareloj/tgr01-trading-llmv2/actions/workflows/ci.yml)
+[![Official RAG CI](https://github.com/fareloj/hybrid-rag-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/fareloj/hybrid-rag-engine/actions/workflows/ci.yml)
+
 TGR-01 is a local BTC/BRL paper-trading research system. It combines public
 market data, recent news, deterministic indicators, an LLM decision agent, a
 deterministic Risk Manager, and auditable paper execution.
@@ -24,7 +27,7 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Default decision model | `openai/gpt-oss-120b` through an OpenAI-compatible Groq endpoint |
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
-| RAG | Internal PostgreSQL memory plus optional external hybrid retrieval |
+| RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
 | Latest backend validation | 209 Python tests passing |
 | Latest desktop validation | 6 Node tests, Vite build, and Electron smoke passing |
 
@@ -152,16 +155,26 @@ Research basis and red-team evidence:
 - [Trading tool research](docs/research/btc_trading_tools_research.md)
 - [Tool protocol red team](docs/reports/LLM_TOOL_RED_TEAM_REPORT_2026-08-01.md)
 
-## RAG: What Is Actually In This Repository
+## Official RAG
 
-TGR-01 has two distinct retrieval integrations.
+The official retrieval backend is
+[fareloj/hybrid-rag-engine](https://github.com/fareloj/hybrid-rag-engine), a
+separate six-service Docker project. Keeping it in its own repository makes it
+reusable by other projects and gives retrieval its own CI, releases, failure
+domain, and performance evaluation.
 
-### Internal memory
+In the current TGR-01 implementation, the official RAG is used by operator
+queries, health/readiness views, and review tooling. It is not yet injected
+into the live Decision Agent. It also remains outside the deterministic trade
+approval path: retrieval cannot approve, block, or size an order.
+
+### Auxiliary local memory
 
 The repository contains a small PostgreSQL-backed store for curated project
 documents, recent news, past decision cases, chunks, and retrieval audit logs.
-It is useful for inspection and review. It is not in the deterministic
-order-approval path.
+It predates the official engine and remains useful for lightweight audit and
+decision-case inspection. It is not the primary RAG backend and is not in the
+deterministic order-approval path.
 
 ```powershell
 py -3.11 .\backend\tests\ingest_rag_sources.py --project-docs
@@ -170,19 +183,19 @@ py -3.11 .\backend\tests\ingest_decision_cases.py --since-id 1 --limit 100
 py -3.11 .\backend\tests\query_decision_memory.py --current-payload --limit 5
 ```
 
-### External hybrid RAG
+### Hybrid RAG service
 
-[The hybrid RAG engine](https://github.com/fareloj/hybrid-rag-engine) is a separate Docker project. Its service code is **not
-part of this repository**. TGR-01 contains only the HTTP client, safety filters,
-health/query utilities, and a Compose override that mounts this repository
-read-only for ingestion.
+[The official Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine)
+service code is **not duplicated in this repository**. TGR-01 contains the HTTP
+client, safety filters, health/query utilities, and a Compose override that
+mounts this repository read-only for ingestion.
 
-The external system combines local embeddings, PostgreSQL/pgvector, a C++
+The official system combines local embeddings, PostgreSQL/pgvector, a C++
 exact/HNSW dense index, Java Lucene/BM25, reciprocal-rank fusion, and a local
 Qwen reranker on CUDA. In its own final acceptance it reported six healthy
 containers, HNSW recall@10 of 1.0, search p95 around 310 ms, and modest MRR and
 nDCG@5 improvements from reranking. Those are retrieval measurements from the
-external project; cloning TGR-01 alone does not reproduce them, and they say
+official RAG repository; cloning TGR-01 alone does not reproduce them, and they say
 nothing about trading profitability.
 
 TGR-01 treats every retrieved chunk as untrusted. It fixes the corpus, bounds
@@ -274,6 +287,24 @@ npm run dev
 
 ## Verification
 
+### Continuous integration
+
+The required `CI` workflow runs on every push to `main` and every pull request:
+
+- Python 3.11 against a real PostgreSQL 16 service;
+- backend compilation, deterministic tests, and chaos checks;
+- Node tests and the Vite production build;
+- Electron smoke testing under Xvfb.
+
+The official RAG has its own CI for Python contracts, protobuf generation, C++,
+Java, and Docker builds. TGR-01 also provides a manual `Official RAG Integration`
+workflow. On a self-hosted Windows runner labeled `gpu`, it checks out both
+repositories, starts all six Docker services with CUDA, ingests TGR-01, embeds
+and reindexes it, then executes a real health check and retrieval through the
+TGR-01 client. It is intentionally not part of every cloud-hosted pull request:
+the complete stack requires an NVIDIA runtime, model downloads, and persistent
+caches.
+
 Backend:
 
 ```powershell
@@ -307,7 +338,7 @@ backend/
   features/     indicators and payload construction
   ml/           archived neural research code
   ops/          allowlisted TUI/Electron commands
-  rag/          internal store and external RAG client
+  rag/          auxiliary local store and official RAG service client
   risk/         deterministic Risk Manager
   tests/        tests and operational/research utilities
 desktop/        React, Vite, and Electron operations console
@@ -329,7 +360,8 @@ dependencies are ignored by Git.
 - News red flags are lexical heuristics and can produce false positives.
 - Public APIs and RSS feeds can be delayed, unavailable, or structurally
   inconsistent; the safe response is to stop or hold.
-- The optional [RAG](https://github.com/fareloj/hybrid-rag-engine) improves retrieval, not price prediction.
+- The official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine)
+  improves retrieval, not price prediction.
 - There is no real-order endpoint, fill reconciliation, exchange balance source
   of truth, or production incident process.
 

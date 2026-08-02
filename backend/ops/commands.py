@@ -140,8 +140,8 @@ def command_catalog(since_id: str = "1") -> dict[str, CommandSpec]:
             "Atualiza memoria local com noticias recentes persistidas.",
         ),
         "external_rag": CommandSpec(
-            "Consultar RAG externo",
+            "Consultar RAG oficial",
             ("backend/tests/query_external_rag.py",),
-            "Consulta diagnostica ao RAG hibrido; resultados nao participam da decisao de trading.",
+            "Consulta o Hybrid RAG Engine oficial; resultados nao participam da aprovacao de trades.",
         ),
     }

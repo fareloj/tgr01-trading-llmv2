@@ -41,7 +41,7 @@ TUI_ACTION_ROWS = (
     (
         ("RAG Docs", "rag_docs"),
         ("RAG News", "rag_news"),
-        ("RAG Externo", "external_rag"),
+        ("RAG Oficial", "external_rag"),
     ),
 )
 

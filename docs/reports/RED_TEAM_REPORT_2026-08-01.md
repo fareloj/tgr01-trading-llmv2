@@ -4,7 +4,7 @@
 
 Esta revisao verificou o caminho de paper trading, os limites entre LLM e Risk
 Manager, a TUI, a interface Electron, os runners operacionais, a integracao com
-o RAG externo e a capacidade do projeto de falhar de forma conservadora.
+o RAG oficial executado como servico externo e a capacidade do projeto de falhar de forma conservadora.
 
 Nenhuma ordem real foi criada. O projeto continua sem caminho de escrita para
 uma exchange e todos os testes de decisao usaram simulacao ou cenarios
@@ -21,8 +21,8 @@ sinteticos.
 - TUI e Electron: os 17 comandos permitidos estao representados e usam o mesmo
   catalogo Python.
 - Operacoes curtas: workers, logs, entradas, movimento futuro, RAG interno,
-  RAG externo e revisao LLM retornaram `exit 0` pelo runner compartilhado.
-- RAG externo: `ready`, 800 chunks densos, 800 lexicais e reranker CUDA.
+  RAG oficial e revisao LLM retornaram `exit 0` pelo runner compartilhado.
+- RAG oficial: `ready`, 800 chunks densos, 800 lexicais e reranker CUDA.
 - Preflight real: PostgreSQL, relogio, candle, noticia e workers aprovados.
 - Matriz LLM: seguranca `7/7`; qualidade direcional `7/7`.
 - TCN: checkpoint CUDA carregado em modo seguro e advisor restrito a
@@ -189,7 +189,7 @@ presentes no historico completo. Nenhum desses avisos foi ocultado.
 4. O caminho real de exchange continua ausente. Antes de qualquer live trading,
    reconciliacao de fills, taxas, custo medio e fonte da verdade da corretora
    precisa de um projeto e red team separados.
-5. O RAG externo e apenas observacional. Falha ou conteudo hostil nao pode
+5. O RAG oficial e apenas observacional no TGR-01. Falha ou conteudo hostil nao pode
    alterar sizing, aprovar ordem ou substituir os indicadores deterministas.
 6. Existe uma tensao deliberada em noticias stale: o Decision Agent pode propor
    direcao com no maximo 60%, mas o Risk Manager exige pelo menos 70% e bloqueia

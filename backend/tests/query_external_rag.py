@@ -1,4 +1,4 @@
-"""Inspect the external hybrid RAG without granting it trading authority."""
+"""Inspect the official Hybrid RAG Engine without granting it trading authority."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from backend.rag.external_client import ExternalRagClient, build_untrusted_conte
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="Consulta observacional ao RAG hibrido externo.")
+    parser = argparse.ArgumentParser(description="Consulta observacional ao Hybrid RAG Engine oficial.")
     parser.add_argument("query", nargs="?", default="risk manager stale market data safeguards")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--path-prefix")
@@ -34,7 +34,7 @@ def main() -> int:
         return 0 if health.get("status") == "ready" else 2
 
     print(
-        "External RAG: "
+        "Official RAG: "
         f"{health.get('status', 'unknown')} | "
         f"dense={health.get('dense_indexed', 0)} | "
         f"lexical={health.get('lexical_indexed', 0)} | "

@@ -1,0 +1,133 @@
+name: Official RAG Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      rag_ref:
+        description: Branch, tag, or commit from hybrid-rag-engine
+        required: true
+        default: main
+        type: string
+      rebuild_images:
+        description: Rebuild the official RAG service images
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-rag-integration
+  cancel-in-progress: false
+
+jobs:
+  docker-rag:
+    name: Six-service Docker RAG / CUDA
+    runs-on: [self-hosted, windows, x64, gpu]
+    timeout-minutes: 120
+    steps:
+      - name: Check out TGR-01
+        uses: actions/checkout@v4
+        with:
+          path: tgr01
+
+      - name: Check out official Hybrid RAG Engine
+        uses: actions/checkout@v4
+        with:
+          repository: fareloj/hybrid-rag-engine
+          ref: ${{ inputs.rag_ref }}
+          path: hybrid-rag
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: tgr01/backend/requirements.txt
+
+      - name: Install TGR-01 client dependencies
+        shell: pwsh
+        run: python -m pip install -r .\tgr01\backend\requirements.txt
+
+      - name: Start official RAG stack
+        shell: pwsh
+        run: |
+          $env:TGR01_WORKSPACE_PATH = (Resolve-Path .\tgr01).Path
+          "TGR01_WORKSPACE_PATH=$env:TGR01_WORKSPACE_PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $files = @(
+            '-f', '.\hybrid-rag\docker-compose.yml',
+            '-f', '.\tgr01\docker-compose.rag.override.yml'
+          )
+          if ('${{ inputs.rebuild_images }}' -eq 'true') {
+            docker compose @files up -d --build
+          } else {
+            docker compose @files up -d
+          }
+          docker compose @files exec -T ollama ollama pull qwen3-embedding:0.6b
+
+      - name: Wait for dependency health
+        shell: pwsh
+        run: |
+          $deadline = (Get-Date).AddMinutes(10)
+          do {
+            try {
+              $health = Invoke-RestMethod http://localhost:8090/health -TimeoutSec 10
+              if ($health.status -eq 'ok') {
+                $health | ConvertTo-Json -Depth 8
+                exit 0
+              }
+            } catch {
+              Write-Host "RAG not ready: $($_.Exception.Message)"
+            }
+            Start-Sleep -Seconds 10
+          } while ((Get-Date) -lt $deadline)
+          throw 'Official RAG did not become healthy within 10 minutes.'
+
+      - name: Ingest and index TGR-01 corpus
+        shell: pwsh
+        run: |
+          $ingest = @{ root_path = '/trading-workspace'; name = 'tgr01-trading-llmv2' } | ConvertTo-Json
+          Invoke-RestMethod http://localhost:8090/ingest -Method Post -ContentType 'application/json' -Body $ingest -TimeoutSec 300
+          Invoke-RestMethod http://localhost:8090/embed -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 1800
+          Invoke-RestMethod http://localhost:8090/dense/reindex -Method Post -TimeoutSec 300
+          Invoke-RestMethod http://localhost:8090/lexical/reindex -Method Post -TimeoutSec 300
+
+      - name: Validate TGR-01 client against official RAG
+        shell: pwsh
+        env:
+          EXTERNAL_RAG_URL: http://localhost:8090
+          EXTERNAL_RAG_CORPUS: tgr01-trading-llmv2
+          EXTERNAL_RAG_TIMEOUT_SECONDS: "60"
+          EXTERNAL_RAG_RERANKER_TIMEOUT_SECONDS: "45"
+          PYTHONUTF8: "1"
+        run: |
+          python .\tgr01\backend\tests\query_external_rag.py --health
+          python .\tgr01\backend\tests\query_external_rag.py `
+            'where does RiskManager reject stale market data' `
+            --path-prefix backend/risk/ `
+            --language python `
+            --json
+
+      - name: Capture Docker diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          $files = @(
+            '-f', '.\hybrid-rag\docker-compose.yml',
+            '-f', '.\tgr01\docker-compose.rag.override.yml'
+          )
+          docker compose @files ps
+          if ('${{ job.status }}' -ne 'success') {
+            docker compose @files logs --tail 300
+          }
+
+      - name: Stop official RAG stack
+        if: always()
+        shell: pwsh
+        run: |
+          $files = @(
+            '-f', '.\hybrid-rag\docker-compose.yml',
+            '-f', '.\tgr01\docker-compose.rag.override.yml'
+          )
+          docker compose @files down

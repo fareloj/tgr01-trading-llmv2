@@ -22,7 +22,7 @@ ordens reais. Qualquer transicao para capital real e um projeto separado.
 - Interface Electron/Vite compilada para producao.
 - Dump PostgreSQL mais recente validado por `pg_restore --list`: formato
   custom, 78 entradas de catalogo e dados.
-- RAG externo: 800 chunks densos e 800 lexicais, HNSW carregado e reranker em
+- RAG oficial (servico Docker separado): 800 chunks densos e 800 lexicais, HNSW carregado e reranker em
   CUDA.
 - Matriz adversarial do LLM: qualidade direcional 7/7 e seguranca 7/7.
 - TCN multi-task avaliada em teste temporal reservado e exposta somente por um

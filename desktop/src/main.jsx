@@ -218,7 +218,7 @@ function App() {
         <TopStatus icon={Gauge} label="Mode" value="PAPER" />
         <TopStatus icon={Database} label="Database" value={state.database?.backend || "PostgreSQL"} detail="Connected" />
         <TopStatus icon={UsersRound} label="Workers" value={`${healthyWorkers} / 2 Healthy`} />
-        <TopStatus icon={Brain} label="External RAG" value={(state.external_rag?.status || "unknown").toUpperCase()} detail={`D ${state.external_rag?.dense_indexed ?? 0} / L ${state.external_rag?.lexical_indexed ?? 0}`} tone={state.external_rag?.status === "ready" ? "good" : "bad"} />
+        <TopStatus icon={Brain} label="Official RAG" value={(state.external_rag?.status || "unknown").toUpperCase()} detail={`D ${state.external_rag?.dense_indexed ?? 0} / L ${state.external_rag?.lexical_indexed ?? 0}`} tone={state.external_rag?.status === "ready" ? "good" : "bad"} />
         <TopStatus icon={Clock3} label="Clock" value={state.clock?.status === "OK" ? "Verified" : "Review"} detail={`Skew: ${state.clock?.skew_seconds ?? "--"}s`} tone={state.clock?.status === "OK" ? "good" : "bad"} />
         <button className="icon-button" title="Refresh state" aria-label="Refresh state" onClick={refresh}><RefreshCw size={16} /></button>
       </header>
@@ -325,7 +325,7 @@ function App() {
           <button data-action="readiness" onClick={() => run("readiness")} disabled={running || !isElectron}><CheckCircle2 size={13} />Readiness</button>
           <button data-action="ragDocs" onClick={() => run("ragDocs")} disabled={running || !isElectron}><Brain size={13} />RAG Docs</button>
           <button data-action="ragNews" onClick={() => run("ragNews")} disabled={running || !isElectron}><Brain size={13} />RAG News</button>
-          <button id="rag-memory" data-action="externalRag" onClick={() => run("externalRag")} disabled={running || !isElectron}><Brain size={13} />External RAG</button>
+          <button id="rag-memory" data-action="externalRag" onClick={() => run("externalRag")} disabled={running || !isElectron}><Brain size={13} />Official RAG</button>
         </div>
       </section>
     </main>
