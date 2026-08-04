@@ -136,6 +136,35 @@ py -3.11 .\backend\tests\evaluate_decisions.py --since-id 1 --horizons 5,15,30,6
 py -3.11 .\backend\tests\trading_readiness_report.py
 ```
 
+### Reproducible historical campaign
+
+`run_historical_campaign.py` freezes non-overlapping uptrend, downtrend, and
+sideways windows before it calls an LLM. Every selected prompt variant receives
+the same timestamps, exposure assumption, horizons, and news mode. The campaign
+compares the raw LLM action with the deterministic Risk Manager verdict and
+scores matured observations after the paper fee and ATR-derived slippage
+assumptions. It never writes an order, trade log, or portfolio balance.
+
+Inspect the frozen sample without consuming provider quota:
+
+```powershell
+py -3.11 .\backend\tests\run_historical_campaign.py `
+  --from-local "2026-06-06 00:00" --to-local "2026-06-07 23:59" `
+  --variants current balanced --plan-only
+```
+
+Run the same stratified comparison after reviewing the call count:
+
+```powershell
+py -3.11 .\backend\tests\run_historical_campaign.py `
+  --from-local "2026-06-06 00:00" --to-local "2026-06-07 23:59" `
+  --variants current balanced --news-mode historical
+```
+
+Reports are timestamped under `backend/reports/` and are ignored by Git. The
+selected regimes use the complete future window, so this evaluates behavior in
+known conditions; it is not an unbiased backtest or evidence of profitability.
+
 ## LLM Analysis Tools
 
 An optional protocol lets the model request up to three bounded calculations:
@@ -355,8 +384,8 @@ dependencies are ignored by Git.
 - No claim of profitability or predictive edge is supported by current data.
 - The live Decision Agent has been checked on a small adversarial matrix, not a
   statistically representative market sample.
-- Historical evaluation still needs more matured BUY and SELL observations
-  across multiple regimes and after realistic costs.
+- The historical campaign runner exists, but a statistically useful conclusion
+  still needs many independent periods with matured BUY and SELL observations.
 - News red flags are lexical heuristics and can produce false positives.
 - Public APIs and RSS feeds can be delayed, unavailable, or structurally
   inconsistent; the safe response is to stop or hold.

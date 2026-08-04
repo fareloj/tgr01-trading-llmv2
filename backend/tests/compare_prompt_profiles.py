@@ -12,6 +12,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR.parent))
 
 from backend.agents.contracts import DecisionOutput
+from backend.agents.decision_agent import load_api_keys
 from backend.features.payload_builder import build_news_risk
 from backend.risk.risk_manager import RiskManager
 
@@ -156,37 +157,61 @@ def synthetic_scenarios() -> dict:
 
 class PromptProfileRunner:
     def __init__(self):
-        api_key = os.getenv("GROQ_API_KEY", "")
-        if not api_key:
-            raise RuntimeError("GROQ_API_KEY ausente em backend/.env; este harness precisa chamar o LLM.")
-
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
-        )
+        self.api_keys = load_api_keys()
+        if not self.api_keys:
+            raise RuntimeError("Nenhuma chave Groq configurada em backend/.env; este harness precisa chamar o LLM.")
+        self.key_index = 0
+        self.base_url = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+        self.client = self._build_client()
         self.model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
         self.schema_instructions = (
             "Retorne APENAS um JSON valido seguindo este schema:\n"
             f"{json.dumps(DecisionOutput.model_json_schema())}"
         )
 
+    def _build_client(self):
+        return OpenAI(api_key=self.api_keys[self.key_index], base_url=self.base_url)
+
+    def _rotate_key(self) -> bool:
+        if self.key_index + 1 >= len(self.api_keys):
+            return False
+        self.key_index += 1
+        self.client = self._build_client()
+        return True
+
+    def _request_limits(self) -> dict:
+        if self.model.startswith("openai/gpt-oss"):
+            return {"max_completion_tokens": 600, "reasoning_effort": "low"}
+        return {"max_tokens": 450}
+
     def run(self, profile: str, payload: dict) -> DecisionOutput:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": PROMPT_PROFILES[profile]},
-                {
-                    "role": "user",
-                    "content": (
-                        f"{self.schema_instructions}\n\n"
-                        f"Payload sintetico de avaliacao:\n{json.dumps(payload, ensure_ascii=False)}"
-                    ),
-                },
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.0,
-        )
-        return DecisionOutput.model_validate_json(response.choices[0].message.content)
+        messages = [
+            {"role": "system", "content": PROMPT_PROFILES[profile]},
+            {
+                "role": "user",
+                "content": (
+                    f"{self.schema_instructions}\n\n"
+                    f"Payload de avaliacao:\n{json.dumps(payload, ensure_ascii=False)}"
+                ),
+            },
+        ]
+        last_error = None
+        for _ in range(max(1, len(self.api_keys))):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    temperature=0.0,
+                    **self._request_limits(),
+                )
+                return DecisionOutput.model_validate_json(response.choices[0].message.content)
+            except Exception as error:
+                last_error = error
+                if type(error).__name__ in {"RateLimitError", "AuthenticationError"} and self._rotate_key():
+                    continue
+                raise
+        raise RuntimeError(f"Prompt profile failed: {type(last_error).__name__}") from last_error
 
 
 def evaluate_profile_matrix(profiles: list[str], scenarios: dict, include_payload: bool):
