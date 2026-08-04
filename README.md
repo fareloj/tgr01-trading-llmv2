@@ -28,10 +28,10 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
 | RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
-| Latest backend validation | 209 Python tests passing |
+| Latest backend validation | 220 Python tests passing |
 | Latest desktop validation | 6 Node tests, Vite build, and Electron smoke passing |
 
-These test counts describe the state recorded on 2026-08-01. They validate
+These test counts describe the state recorded on 2026-08-04. They validate
 contracts, failure behavior, accounting, and interfaces. They do not measure
 future returns.
 
@@ -164,6 +164,22 @@ py -3.11 .\backend\tests\run_historical_campaign.py `
 Reports are timestamped under `backend/reports/` and are ignored by Git. The
 selected regimes use the complete future window, so this evaluates behavior in
 known conditions; it is not an unbiased backtest or evidence of profitability.
+
+Paired campaign reports can be consolidated while verifying that price, RSI,
+MACD, and ATR stayed identical across each news intervention:
+
+```powershell
+py -3.11 .\backend\tests\compare_historical_campaigns.py `
+  "backend/reports/matrix_*.json"
+```
+
+The August 2026 diagnostic compared historical news, synthetic fresh-neutral
+news, and technical-only context over 27 paired timestamps (81 decisions).
+Removing or neutralizing news increased directional activity, but the added
+paper actions had negative average edge after configured costs at every tested
+horizon. This result supports keeping news as risk context; it does not justify
+loosening the Risk Manager or using real funds. See the full
+[paired news-mode comparison](docs/reports/HISTORICAL_NEWS_MODE_COMPARISON_2026-08-04.md).
 
 ## LLM Analysis Tools
 

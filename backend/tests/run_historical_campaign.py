@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 import sys
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +21,9 @@ from backend.agents.decision_agent import (
     enforce_payload_decision_constraints,
     has_llm_api_key,
     replace_generic_hold_reason,
+    parse_retry_seconds,
 )
+import backend.agents.decision_agent as decision_agent_module
 from backend.core import database
 from backend.evaluation.historical_campaign import (
     campaign_fingerprint,
@@ -210,6 +213,41 @@ def run_decision(variant: str, payload: dict, current_agent, profile_runner):
     return enforce_payload_decision_constraints(decision, payload)
 
 
+def run_decision_with_retry(
+    variant: str,
+    payload: dict,
+    current_agent,
+    profile_runner,
+    *,
+    retries: int,
+    minimum_wait_seconds: float,
+    sleep_fn=time.sleep,
+):
+    """Retry bounded provider failures while preserving fail-closed decisions."""
+    last_decision = None
+    for attempt in range(retries + 1):
+        try:
+            decision = run_decision(variant, payload, current_agent, profile_runner)
+        except Exception as error:
+            if type(error).__name__ != "RateLimitError" or attempt >= retries:
+                raise
+            wait_seconds = max(minimum_wait_seconds, parse_retry_seconds(error) + 1)
+            print(f"[retry] Rate limit em {variant}; aguardando {wait_seconds:.0f}s.")
+            sleep_fn(wait_seconds)
+            continue
+
+        last_decision = decision
+        technical_failure = "technical failure" in decision.reasoning.lower()
+        if not technical_failure or attempt >= retries:
+            return decision
+
+        cooldown_remaining = max(0, decision_agent_module.LLM_COOLDOWN_UNTIL - int(time.time()))
+        wait_seconds = max(minimum_wait_seconds, cooldown_remaining + 1)
+        print(f"[retry] Falha tecnica em {variant}; aguardando {wait_seconds:.0f}s.")
+        sleep_fn(wait_seconds)
+    return last_decision
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Freeze market regimes and compare LLM/Risk decisions without executing paper orders."
@@ -235,6 +273,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--news-mode", choices=["historical", "neutral-fresh", "technical-only"], default="historical")
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument("--max-calls", type=int, default=100)
+    parser.add_argument("--llm-retries", type=int, default=2)
+    parser.add_argument("--retry-wait-seconds", type=float, default=5.0)
     parser.add_argument("--yes", action="store_true", help="Allow a campaign larger than --max-calls.")
     parser.add_argument("--resume", action="store_true", help="Resume an existing --json-out with the same fingerprint.")
     parser.add_argument("--overwrite", action="store_true")
@@ -267,6 +307,8 @@ def main() -> int:
         raise SystemExit("Decision/market thresholds must be non-negative and trend threshold must be positive")
     if not 0 < args.min_coverage_pct <= 100:
         raise SystemExit("--min-coverage-pct must be in (0, 100]")
+    if args.llm_retries < 0 or args.retry_wait_seconds < 0:
+        raise SystemExit("--llm-retries and --retry-wait-seconds cannot be negative")
 
     source_candles = fetch_candles(args.asset, args.timeframe, from_ts, to_ts)
     candidates = find_windows(
@@ -319,6 +361,8 @@ def main() -> int:
             "max_slippage_rate": execution_config.max_slippage_rate,
             "atr_slippage_factor": execution_config.atr_slippage_factor,
         },
+        "llm_retries": args.llm_retries,
+        "retry_wait_seconds": args.retry_wait_seconds,
     }
     descriptors = variant_descriptors(args.variants)
     fingerprint = campaign_fingerprint(config, frozen, descriptors)
@@ -416,7 +460,14 @@ def main() -> int:
                     apply_news_mode(payload, args.news_mode, decision_timestamp)
                     portfolio = payload.setdefault("portfolio_context", {})
                     portfolio["current_exposure_percentage"] = args.exposure_pct
-                    decision = run_decision(variant, payload, current_agent, profile_runner)
+                    decision = run_decision_with_retry(
+                        variant,
+                        payload,
+                        current_agent,
+                        profile_runner,
+                        retries=args.llm_retries,
+                        minimum_wait_seconds=args.retry_wait_seconds,
+                    )
                     final_order = risk_manager.evaluate_order(
                         llm_action=decision.action,
                         llm_conviction=decision.conviction,

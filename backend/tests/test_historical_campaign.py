@@ -12,6 +12,7 @@ from backend.evaluation.historical_campaign import (
     summarize_results,
 )
 from backend.tests.compare_prompt_profiles import PromptProfileRunner
+from backend.tests import run_historical_campaign as campaign_runner
 
 
 def _window(label, start, end, move, volatility=0.1):
@@ -132,3 +133,26 @@ def test_prompt_profile_runner_uses_bounded_gpt_oss_output_and_rotates_keys():
     assert runner.key_index == 1
     assert runner.client == "client-1"
     assert runner._rotate_key() is False
+
+
+def test_campaign_retry_retries_fail_closed_technical_decision(monkeypatch):
+    decisions = [
+        SimpleNamespace(action="HOLD", reasoning="LLM technical failure: RateLimitError"),
+        SimpleNamespace(action="BUY", reasoning="fresh validated decision"),
+    ]
+    waits = []
+    monkeypatch.setattr(campaign_runner, "run_decision", lambda *args, **kwargs: decisions.pop(0))
+    monkeypatch.setattr(campaign_runner.decision_agent_module, "LLM_COOLDOWN_UNTIL", 0)
+
+    result = campaign_runner.run_decision_with_retry(
+        "current",
+        {},
+        None,
+        None,
+        retries=1,
+        minimum_wait_seconds=2,
+        sleep_fn=waits.append,
+    )
+
+    assert result.action == "BUY"
+    assert waits == [2]
