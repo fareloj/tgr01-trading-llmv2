@@ -265,6 +265,20 @@ class DecisionAgent:
             }
         return {"max_tokens": 450 if purpose == "decision" else 300}
 
+    def _is_local_provider(self) -> bool:
+        """Local OpenAI-compatible servers (e.g. LM Studio) require a strict json_schema
+        response_format; hosted Groq/OpenAI-style endpoints accept the looser json_object mode."""
+        base_url = (self.base_url or "").lower()
+        return "localhost" in base_url or "127.0.0.1" in base_url
+
+    def _response_format(self, schema_model, schema_name: str) -> dict:
+        if self._is_local_provider():
+            return {
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "schema": schema_model.model_json_schema()},
+            }
+        return {"type": "json_object"}
+
     def _rotate_key(self) -> bool:
         if self.api_key_index + 1 >= len(self.api_keys):
             return False
@@ -318,7 +332,7 @@ class DecisionAgent:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    response_format={"type": "json_object"},
+                    response_format=self._response_format(AnalysisPlan, "analysis_plan"),
                     temperature=0.0,
                     **self._request_limits("planner"),
                 )
@@ -464,7 +478,7 @@ class DecisionAgent:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    response_format={"type": "json_object"},
+                    response_format=self._response_format(DecisionOutput, "decision_output"),
                     temperature=0.0,
                     **self._request_limits("decision"),
                 )

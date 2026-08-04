@@ -172,6 +172,20 @@ class PromptProfileRunner:
     def _build_client(self):
         return OpenAI(api_key=self.api_keys[self.key_index], base_url=self.base_url)
 
+    def _is_local_provider(self) -> bool:
+        """Local OpenAI-compatible servers (e.g. LM Studio) require a strict json_schema
+        response_format; hosted Groq/OpenAI-style endpoints accept the looser json_object mode."""
+        base_url = (self.base_url or "").lower()
+        return "localhost" in base_url or "127.0.0.1" in base_url
+
+    def _response_format(self) -> dict:
+        if self._is_local_provider():
+            return {
+                "type": "json_schema",
+                "json_schema": {"name": "decision_output", "schema": DecisionOutput.model_json_schema()},
+            }
+        return {"type": "json_object"}
+
     def _rotate_key(self) -> bool:
         if self.key_index + 1 >= len(self.api_keys):
             return False
@@ -201,7 +215,7 @@ class PromptProfileRunner:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    response_format={"type": "json_object"},
+                    response_format=self._response_format(),
                     temperature=0.0,
                     **self._request_limits(),
                 )
