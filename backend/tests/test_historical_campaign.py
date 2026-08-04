@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import json
 
 import pytest
 
@@ -44,6 +45,17 @@ def test_regime_selection_is_ranked_and_non_overlapping():
         ("DOWNTREND", 14400),
         ("SIDEWAYS", 21600),
     ]
+
+
+def test_stratified_regime_selection_spans_move_severity():
+    windows = [
+        _window("UPTREND", index * 7200, index * 7200 + 3600, float(index + 1))
+        for index in range(9)
+    ]
+
+    selected = select_non_overlapping_windows(windows, per_regime=3, strategy="stratified")
+
+    assert [item.move_pct for _, item in selected] == [2.0, 5.0, 8.0]
 
 
 def test_freeze_windows_uses_the_same_spaced_timestamps_for_every_variant():
@@ -156,3 +168,67 @@ def test_campaign_retry_retries_fail_closed_technical_decision(monkeypatch):
 
     assert result.action == "BUY"
     assert waits == [2]
+
+
+def test_campaign_range_uses_manifest_and_seals_holdout(tmp_path):
+    from backend.evaluation.historical_dataset import manifest_contract_id
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest = {
+        "schema_version": 1,
+        "source_fingerprint": "source-123",
+        "split_config": {"partition_method": "test"},
+        "partitions": {
+            "development": {"start_timestamp": 1000, "end_timestamp": 2000},
+            "holdout": {"start_timestamp": 3000, "end_timestamp": 4000},
+        },
+    }
+    manifest["dataset_id"] = manifest_contract_id(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    development = SimpleNamespace(
+        dataset_manifest=str(manifest_path),
+        partition="development",
+        holdout_approval=None,
+        from_local=None,
+        to_local=None,
+    )
+    holdout = SimpleNamespace(**{**vars(development), "partition": "holdout"})
+
+    assert campaign_runner.resolve_campaign_range(development)[:2] == (1000, 2000)
+    with pytest.raises(SystemExit, match="Holdout is sealed"):
+        campaign_runner.resolve_campaign_range(holdout)
+    holdout.holdout_approval = manifest["dataset_id"]
+    assert campaign_runner.resolve_campaign_range(holdout)[:2] == (3000, 4000)
+
+
+def test_technical_only_news_mode_marks_news_unavailable_and_stale():
+    payload = {
+        "news_context": [{"headline": "old"}],
+        "data_health": {
+            "latest_news_timestamp": 123,
+            "news_age_seconds": 10,
+            "is_news_stale": False,
+        },
+        "news_risk": {"risk_level": "NORMAL"},
+    }
+
+    campaign_runner.apply_news_mode(payload, "technical-only", timestamp=999)
+
+    assert payload["news_context"] == []
+    assert payload["news_context_mode"] == "UNAVAILABLE_BY_TEST_DESIGN"
+    assert payload["data_health"]["latest_news_timestamp"] is None
+    assert payload["data_health"]["news_age_seconds"] is None
+    assert payload["data_health"]["is_news_stale"] is True
+    assert payload["news_risk"]["risk_level"] == "UNAVAILABLE"
+    assert "Never describe news as fresh" in payload["test_mode_instructions"]
+
+
+def test_neutral_fresh_news_mode_is_explicitly_synthetic():
+    payload = {"data_health": {}, "news_risk": {}}
+
+    campaign_runner.apply_news_mode(payload, "neutral-fresh", timestamp=999)
+
+    assert payload["news_context_mode"] == "SYNTHETIC_NEUTRAL"
+    assert payload["data_health"]["latest_news_timestamp"] == 999
+    assert payload["data_health"]["news_age_seconds"] == 0
+    assert payload["data_health"]["is_news_stale"] is False

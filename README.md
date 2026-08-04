@@ -28,7 +28,7 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
 | RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
-| Latest backend validation | 220 Python tests passing |
+| Latest backend validation | 231 Python tests passing |
 | Latest desktop validation | 6 Node tests, Vite build, and Electron smoke passing |
 
 These test counts describe the state recorded on 2026-08-04. They validate
@@ -165,6 +165,41 @@ Reports are timestamped under `backend/reports/` and are ignored by Git. The
 selected regimes use the complete future window, so this evaluates behavior in
 known conditions; it is not an unbiased backtest or evidence of profitability.
 
+For larger experiments, the Mercado Bitcoin collector stores validated,
+resumable chunks outside Git. A separate manifest hashes every chunk and creates
+chronological `development`, `validation`, and sealed `holdout` partitions with
+purged boundaries. This prevents future labels near a split from leaking into
+prompt or rule selection.
+
+```powershell
+py -3.11 .\backend\tests\download_mb_history.py
+py -3.11 .\backend\tests\prepare_historical_evaluation_dataset.py
+py -3.11 .\backend\tests\import_historical_partition.py `
+  --partition development
+py -3.11 .\backend\tests\run_historical_campaign.py `
+  --dataset-manifest .\backend\data_exports\historical_evaluation\manifest.json `
+  --partition development --variants balanced --news-mode technical-only `
+  --selection-strategy stratified
+```
+
+The holdout requires its exact `dataset_id` as an explicit approval argument.
+It should only be opened after prompts, tools, thresholds, and risk rules are
+frozen. Candle history alone cannot reconstruct point-in-time news, so older
+periods must use technical-only/synthetic controls unless an independently
+archived and timestamp-correct news corpus is available.
+
+`stratified` samples multiple move and volatility severity bands and is the
+default for model evaluation. `extreme` remains available for explicit stress
+tests; it must not be treated as a representative market sample.
+
+A 27-call technical-only development smoke test completed without provider
+errors, but exposed a fixture contradiction: news had been removed while its
+health fields still described it as fresh. The report is retained as an
+invalidated development incident, not trading evidence. The fixture and
+auditable decision context are now deterministic; the frozen 300-call campaign
+is the next candidate evaluation. See
+[Historical Development Campaign](docs/reports/HISTORICAL_DEVELOPMENT_CAMPAIGN_2026-08-04.md).
+
 Paired campaign reports can be consolidated while verifying that price, RSI,
 MACD, and ATR stayed identical across each news intervention:
 
@@ -174,7 +209,9 @@ py -3.11 .\backend\tests\compare_historical_campaigns.py `
 ```
 
 The August 2026 diagnostic compared historical news, synthetic fresh-neutral
-news, and technical-only context over 27 paired timestamps (81 decisions).
+news, and an early empty-news fixture over 27 paired timestamps (81 decisions).
+That early fixture incorrectly retained fresh news-health fields, so its result
+is an ablation diagnostic rather than a valid unavailable-news campaign.
 Removing or neutralizing news increased directional activity, but the added
 paper actions had negative average edge after configured costs at every tested
 horizon. This result supports keeping news as risk context; it does not justify

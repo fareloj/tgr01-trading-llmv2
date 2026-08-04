@@ -47,14 +47,24 @@ def upsert_kline(kline_dict: Dict[str, Any], connection=None):
 
 def add_klines(klines_list: List[Dict[str, Any]], connection=None) -> int:
     """Upserts multiple klines in one transaction and returns the processed count."""
+    if not klines_list:
+        return 0
+    insert_stmt = pg_insert(klines)
+    stmt = insert_stmt.on_conflict_do_update(
+        constraint='uq_klines_asset_timeframe_timestamp',
+        set_={
+            'open': insert_stmt.excluded.open,
+            'high': insert_stmt.excluded.high,
+            'low': insert_stmt.excluded.low,
+            'close': insert_stmt.excluded.close,
+            'volume': insert_stmt.excluded.volume,
+        },
+    )
     if connection is not None:
-        for kline in klines_list:
-            upsert_kline(kline, connection=connection)
-        return len(klines_list)
-
-    with engine.begin() as conn:
-        for kline in klines_list:
-            upsert_kline(kline, connection=conn)
+        connection.execute(stmt, klines_list)
+    else:
+        with engine.begin() as conn:
+            conn.execute(stmt, klines_list)
     return len(klines_list)
 
 def get_klines(asset: str, timeframe: str, limit: int, as_of_timestamp: Optional[int] = None, connection=None) -> List[Dict[str, Any]]:

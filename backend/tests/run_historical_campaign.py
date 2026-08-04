@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ from backend.evaluation.historical_campaign import (
     select_non_overlapping_windows,
     summarize_results,
 )
+from backend.evaluation.historical_dataset import verify_manifest_contract
 from backend.execution.paper_simulator import PaperExecutionConfig, estimate_slippage_rate
 from backend.features.payload_builder import build_agent_payload
 from backend.risk.risk_manager import RiskManager
@@ -86,11 +88,10 @@ def variant_descriptors(variants: list[str]) -> list[dict]:
 
 def apply_news_mode(payload: dict, mode: str, timestamp: int) -> None:
     if mode == "historical":
+        payload["news_context_mode"] = "OBSERVED"
         return
     health = payload.setdefault("data_health", {})
     risk = payload.setdefault("news_risk", {})
-    health["is_news_stale"] = False
-    health["news_age_seconds"] = 0
     risk.update(
         {
             "has_negative_red_flag": False,
@@ -101,6 +102,10 @@ def apply_news_mode(payload: dict, mode: str, timestamp: int) -> None:
         }
     )
     if mode == "neutral-fresh":
+        payload["news_context_mode"] = "SYNTHETIC_NEUTRAL"
+        health["latest_news_timestamp"] = timestamp
+        health["is_news_stale"] = False
+        health["news_age_seconds"] = 0
         payload["news_context"] = [
             {
                 "timestamp": timestamp,
@@ -109,9 +114,16 @@ def apply_news_mode(payload: dict, mode: str, timestamp: int) -> None:
             }
         ]
     elif mode == "technical-only":
+        payload["news_context_mode"] = "UNAVAILABLE_BY_TEST_DESIGN"
+        health["latest_news_timestamp"] = None
+        health["is_news_stale"] = True
+        health["news_age_seconds"] = None
+        risk["risk_level"] = "UNAVAILABLE"
         payload["news_context"] = []
         payload["test_mode_instructions"] = (
-            "Historical intervention: evaluate technical indicators and exposure without news direction."
+            "Historical intervention: news is unavailable by test design. Evaluate technical indicators "
+            "and exposure without news direction. Never describe news as fresh, current, mixed, positive, "
+            "or negative."
         )
 
 
@@ -124,6 +136,13 @@ def atomic_write_json(path: Path, report: dict) -> None:
 
 def render_markdown(report: dict) -> str:
     config = report["config"]
+    dataset_lines = []
+    if config.get("dataset_id"):
+        dataset_lines = [
+            f"- Dataset: `{config['dataset_id']}`",
+            f"- Dataset partition: `{config['dataset_partition']}`",
+            f"- Selection strategy: `{config.get('selection_strategy', 'extreme')}`",
+        ]
     lines = [
         "# Historical Decision Campaign",
         "",
@@ -139,6 +158,7 @@ def render_markdown(report: dict) -> str:
         "## Configuration",
         "",
         f"- Range: `{format_local(config['from_ts'])}` to `{format_local(config['to_ts'])}`",
+        *dataset_lines,
         f"- Variants: `{', '.join(config['variants'])}`",
         f"- News mode: `{config['news_mode']}`",
         f"- Frozen exposure: `{config['exposure_pct']}%`",
@@ -172,17 +192,33 @@ def render_markdown(report: dict) -> str:
                 f"- Risk actions: `{data['risk_actions']}`",
                 f"- LLM to Risk: `{data['llm_to_risk']}`",
                 "",
-                "| Horizon | Matured | Gaps | Good | Bad | Neutral | Missed upside | Avoided downside | Avg net edge |",
-                "|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+                "| Regime | Expected | Samples | LLM matches | Risk matches |",
+                "|---|---|---:|---:|---:|",
+            ]
+        )
+        for regime, alignment in data["regime_alignment"].items():
+            lines.append(
+                f"| {regime} | {alignment['expected_action'] or 'N/A'} | {alignment['samples']} | "
+                f"{alignment['llm_matches'] if alignment['llm_matches'] is not None else 'N/A'} | "
+                f"{alignment['risk_matches'] if alignment['risk_matches'] is not None else 'N/A'} |"
+            )
+        lines.extend(
+            [
+                "",
+                "| Horizon | Matured | Gaps | Directional | D-good | D-bad | D-neutral | Precision | Avg net edge | Missed upside | Avoided downside |",
+                "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
             ]
         )
         for horizon, bucket in data["horizons"].items():
             average = bucket.get("average_directional_edge_after_cost_pct")
+            precision = bucket.get("directional_precision")
+            precision_text = f"{precision:.1%}" if precision is not None else "N/A"
             lines.append(
                 f"| {horizon}m | {bucket.get('matured', 0)} | {bucket.get('data_gap', 0)} | "
-                f"{bucket.get('good', 0)} | {bucket.get('bad', 0)} | {bucket.get('neutral', 0)} | "
-                f"{bucket.get('missed_upside', 0)} | {bucket.get('avoided_downside', 0)} | "
-                f"{f'{average:+.4f}%' if average is not None else 'N/A'} |"
+                f"{bucket['directional_samples']} | {bucket['directional_good']} | {bucket['directional_bad']} | "
+                f"{bucket['directional_neutral']} | {precision_text} | "
+                f"{f'{average:+.4f}%' if average is not None else 'N/A'} | "
+                f"{bucket.get('missed_upside', 0)} | {bucket.get('avoided_downside', 0)} |"
             )
         lines.append("")
 
@@ -252,14 +288,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Freeze market regimes and compare LLM/Risk decisions without executing paper orders."
     )
-    parser.add_argument("--from-local", required=True, help='Start in "YYYY-MM-DD HH:MM".')
-    parser.add_argument("--to-local", required=True, help='End in "YYYY-MM-DD HH:MM".')
+    parser.add_argument("--from-local", help='Start in "YYYY-MM-DD HH:MM".')
+    parser.add_argument("--to-local", help='End in "YYYY-MM-DD HH:MM".')
+    parser.add_argument("--dataset-manifest", help="Frozen historical evaluation manifest.")
+    parser.add_argument("--partition", choices=["development", "validation", "holdout"])
+    parser.add_argument(
+        "--holdout-approval",
+        help="To evaluate holdout, pass the exact dataset_id after finalizing all candidate rules.",
+    )
     parser.add_argument("--asset", default="BTC/BRL")
     parser.add_argument("--timeframe", default="1m")
     parser.add_argument("--variants", nargs="+", choices=["current", *sorted(PROMPT_PROFILES)], default=["current", "balanced"])
     parser.add_argument("--window-minutes", type=int, default=60)
     parser.add_argument("--stride-minutes", type=int, default=10)
     parser.add_argument("--per-regime", type=int, default=1)
+    parser.add_argument("--selection-strategy", choices=["stratified", "extreme"], default="stratified")
     parser.add_argument("--include-high-volatility", action="store_true")
     parser.add_argument("--cycles-per-window", type=int, default=5)
     parser.add_argument("--step-seconds", type=int, default=300)
@@ -283,10 +326,37 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_campaign_range(args) -> tuple[int, int, dict | None]:
+    if bool(args.dataset_manifest) != bool(args.partition):
+        raise SystemExit("--dataset-manifest and --partition must be provided together")
+    if not args.dataset_manifest:
+        if not args.from_local or not args.to_local:
+            raise SystemExit("Provide --from-local/--to-local or a frozen dataset manifest and partition")
+        return parse_local_datetime(args.from_local), parse_local_datetime(args.to_local), None
+
+    manifest = json.loads(Path(args.dataset_manifest).read_text(encoding="utf-8"))
+    try:
+        verify_manifest_contract(manifest)
+    except (KeyError, TypeError, ValueError) as error:
+        raise SystemExit(f"Invalid historical dataset manifest: {error}") from error
+    dataset_id = str(manifest.get("dataset_id") or "")
+    if not dataset_id or args.partition not in manifest.get("partitions", {}):
+        raise SystemExit("Invalid historical dataset manifest")
+    if args.partition == "holdout" and args.holdout_approval != dataset_id:
+        raise SystemExit(
+            f"Holdout is sealed. Pass --holdout-approval {dataset_id} only after prompts and rules are frozen."
+        )
+    bounds = manifest["partitions"][args.partition]
+    from_ts = parse_local_datetime(args.from_local) if args.from_local else int(bounds["start_timestamp"])
+    to_ts = parse_local_datetime(args.to_local) if args.to_local else int(bounds["end_timestamp"])
+    if from_ts < int(bounds["start_timestamp"]) or to_ts > int(bounds["end_timestamp"]):
+        raise SystemExit(f"Requested range escapes the frozen {args.partition} partition")
+    return from_ts, to_ts, manifest
+
+
 def main() -> int:
     args = build_parser().parse_args()
-    from_ts = parse_local_datetime(args.from_local)
-    to_ts = parse_local_datetime(args.to_local)
+    from_ts, to_ts, dataset_manifest = resolve_campaign_range(args)
     if from_ts >= to_ts:
         raise SystemExit("--from-local must be earlier than --to-local")
     if not 0 <= args.exposure_pct <= 100:
@@ -323,6 +393,7 @@ def main() -> int:
         candidates,
         per_regime=args.per_regime,
         include_high_volatility=args.include_high_volatility,
+        strategy=args.selection_strategy,
     )
     candle_timestamps = [int(item["timestamp"]) for item in source_candles]
     frozen = freeze_windows(
@@ -331,9 +402,14 @@ def main() -> int:
         cycles=args.cycles_per_window,
         step_seconds=args.step_seconds,
     )
-    missing = sorted({"UPTREND", "DOWNTREND", "SIDEWAYS"} - {item.regime for item in frozen})
-    if missing:
-        raise SystemExit(f"Could not freeze required regimes: {', '.join(missing)}")
+    regime_counts = Counter(item.regime for item in frozen)
+    incomplete = [
+        regime
+        for regime in ("UPTREND", "DOWNTREND", "SIDEWAYS")
+        if regime_counts[regime] < args.per_regime
+    ]
+    if incomplete:
+        raise SystemExit(f"Could not freeze {args.per_regime} windows for regimes: {', '.join(incomplete)}")
     if any(not item.cycle_timestamps for item in frozen):
         raise SystemExit("At least one selected window has no cycle timestamps")
 
@@ -347,6 +423,7 @@ def main() -> int:
         "window_minutes": args.window_minutes,
         "stride_minutes": args.stride_minutes,
         "per_regime": args.per_regime,
+        "selection_strategy": args.selection_strategy,
         "include_high_volatility": args.include_high_volatility,
         "cycles_per_window": args.cycles_per_window,
         "step_seconds": args.step_seconds,
@@ -363,6 +440,8 @@ def main() -> int:
         },
         "llm_retries": args.llm_retries,
         "retry_wait_seconds": args.retry_wait_seconds,
+        "dataset_id": dataset_manifest.get("dataset_id") if dataset_manifest else None,
+        "dataset_partition": args.partition if dataset_manifest else None,
     }
     descriptors = variant_descriptors(args.variants)
     fingerprint = campaign_fingerprint(config, frozen, descriptors)

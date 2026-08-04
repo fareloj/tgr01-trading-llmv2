@@ -108,6 +108,7 @@ def build_specific_decision_brief(payload: dict, action: str, reasoning: str) ->
     data_health = payload.get("data_health", {})
     news_risk = payload.get("news_risk", {})
     portfolio = payload.get("portfolio_context", {})
+    news_mode = payload.get("news_context_mode", "OBSERVED")
 
     rsi = technical.get("rsi", {})
     macd = technical.get("macd", {})
@@ -122,6 +123,7 @@ def build_specific_decision_brief(payload: dict, action: str, reasoning: str) ->
         f"Contexto: market_stale={data_health.get('is_market_data_stale')}, "
         f"news_stale={data_health.get('is_news_stale')}, "
         f"news_risk={news_risk.get('risk_level')}, "
+        f"news_mode={news_mode}, "
         f"exposure={portfolio.get('current_exposure_percentage')}%."
     )
     return "\n".join([line_1, line_2, line_3])
@@ -175,11 +177,22 @@ def enforce_payload_decision_constraints(decision: DecisionOutput, payload: dict
             "reasoning": reasoning,
             "decision_brief": build_specific_decision_brief(payload, "HOLD", reasoning),
         })
-    if decision.action != "HOLD" and data_health.get("is_news_stale") and decision.conviction > 60:
-        return decision.model_copy(update={"conviction": 60})
-    if decision.conviction > 80:
-        return decision.model_copy(update={"conviction": 80})
-    return decision
+    conviction = decision.conviction
+    if decision.action != "HOLD" and data_health.get("is_news_stale") and conviction > 60:
+        conviction = 60
+    if conviction > 80:
+        conviction = 80
+
+    # Context fields are audit evidence, so they are rendered from the payload
+    # instead of trusting the model to reproduce freshness and exposure exactly.
+    return decision.model_copy(
+        update={
+            "conviction": conviction,
+            "decision_brief": build_specific_decision_brief(
+                payload, decision.action, decision.reasoning
+            ),
+        }
+    )
 
 
 def format_llm_error(error: Exception) -> str:
@@ -402,6 +415,7 @@ class DecisionAgent:
         Acao: explique por que escolheu BUY, SELL ou HOLD.
         Base tecnica: preco=<price>, RSI=<rsi_value> <rsi_status>, MACD=<macd_hist> <macd_status>, Bollinger=<bb_status>, EMA=<ema_status>, VolSpike=<is_volume_spike>
         Contexto: cite market_stale, news_stale, news_risk e exposicao.
+        Se news_context_mode=UNAVAILABLE_BY_TEST_DESIGN, noticias foram removidas pelo teste: nunca as descreva como frescas, atuais, mistas, positivas ou negativas.
 
         Voce recebera no technical_context os seguintes novos indicadores adicionais:
         - bollinger_bands: possui valores (upper, middle, lower) e status ("ABOVE_UPPER", "BELOW_LOWER", "INSIDE").

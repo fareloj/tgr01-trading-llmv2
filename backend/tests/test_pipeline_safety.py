@@ -618,3 +618,38 @@ def test_build_specific_decision_brief_with_new_indicators():
 
     expected_line_2 = "Base tecnica: preco=50000, RSI=45.2 NEUTRAL, MACD=-0.5 BEARISH_EXPANDING, Bollinger=INSIDE, EMA=BEARISH, VolSpike=False."
     assert expected_line_2 in brief
+
+
+def test_decision_constraints_replace_hallucinated_context_with_payload_evidence():
+    from backend.agents.contracts import DecisionOutput
+    from backend.agents.decision_agent import enforce_payload_decision_constraints
+
+    payload = {
+        "technical_context": {
+            "current_price": 50000,
+            "rsi": {"value": 45.2, "status": "NEUTRAL"},
+            "macd": {"histogram": 2.5, "status": "BULLISH_EXPANDING"},
+        },
+        "data_health": {"is_market_data_stale": False, "is_news_stale": True},
+        "news_risk": {"risk_level": "UNAVAILABLE"},
+        "news_context_mode": "UNAVAILABLE_BY_TEST_DESIGN",
+        "portfolio_context": {"current_exposure_percentage": 15.5},
+    }
+    decision = DecisionOutput(
+        action="BUY",
+        conviction=80,
+        reasoning="MACD bullish com RSI neutro.",
+        decision_brief=(
+            "Acao: BUY por momentum.\n"
+            "Base tecnica: dados alinhados.\n"
+            "Contexto: noticias frescas e positivas."
+        ),
+    )
+
+    constrained = enforce_payload_decision_constraints(decision, payload)
+
+    assert constrained.conviction == 60
+    assert "noticias frescas" not in constrained.decision_brief
+    assert "news_stale=True" in constrained.decision_brief
+    assert "news_risk=UNAVAILABLE" in constrained.decision_brief
+    assert "news_mode=UNAVAILABLE_BY_TEST_DESIGN" in constrained.decision_brief

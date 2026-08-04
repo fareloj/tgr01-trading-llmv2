@@ -1,4 +1,5 @@
 import argparse
+from bisect import bisect_left, bisect_right
 import math
 import sys
 from dataclasses import dataclass
@@ -101,7 +102,9 @@ def find_windows(
     start_ts = first_ts
     while start_ts + window_seconds <= last_ts:
         end_ts = start_ts + window_seconds
-        window_rows = [by_ts[ts] for ts in timestamps if start_ts <= ts <= end_ts]
+        left = bisect_left(timestamps, start_ts)
+        right = bisect_right(timestamps, end_ts)
+        window_rows = [by_ts[ts] for ts in timestamps[left:right]]
         if len(window_rows) >= min_candles:
             start_price = float(window_rows[0]["close"])
             end_price = float(window_rows[-1]["close"])

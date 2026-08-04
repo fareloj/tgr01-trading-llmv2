@@ -56,10 +56,13 @@ def select_non_overlapping_windows(
     *,
     per_regime: int,
     include_high_volatility: bool = False,
+    strategy: str = "extreme",
 ) -> list[tuple[str, object]]:
     """Select deterministic, non-overlapping examples from preclassified windows."""
     if per_regime <= 0:
         raise ValueError("per_regime must be positive")
+    if strategy not in {"extreme", "stratified"}:
+        raise ValueError("strategy must be extreme or stratified")
 
     ranked = {
         "UPTREND": sorted(
@@ -79,15 +82,38 @@ def select_non_overlapping_windows(
     selected: list[tuple[str, object]] = []
     used = []
     for regime in ("UPTREND", "DOWNTREND", "SIDEWAYS"):
+        candidates = ranked[regime]
         count = 0
-        for candidate in ranked[regime]:
+        if strategy == "stratified" and candidates:
+            if regime == "UPTREND":
+                candidates = sorted(candidates, key=lambda item: (item.move_pct, item.volatility_pct, item.start_ts))
+            elif regime == "DOWNTREND":
+                candidates = sorted(candidates, key=lambda item: (abs(item.move_pct), item.volatility_pct, item.start_ts))
+            else:
+                candidates = sorted(candidates, key=lambda item: (item.volatility_pct, abs(item.move_pct), item.start_ts))
+            for index in range(per_regime):
+                start = index * len(candidates) // per_regime
+                end = (index + 1) * len(candidates) // per_regime
+                band = candidates[start:end]
+                midpoint = (len(band) - 1) / 2
+                for band_index, candidate in sorted(
+                    enumerate(band), key=lambda item: (abs(item[0] - midpoint), item[0])
+                ):
+                    if any(_overlaps(candidate, existing) for existing in used):
+                        continue
+                    selected.append((regime, candidate))
+                    used.append(candidate)
+                    count += 1
+                    break
+
+        for candidate in candidates:
+            if count >= per_regime:
+                break
             if any(_overlaps(candidate, existing) for existing in used):
                 continue
             selected.append((regime, candidate))
             used.append(candidate)
             count += 1
-            if count >= per_regime:
-                break
 
     if include_high_volatility:
         candidates = sorted(
