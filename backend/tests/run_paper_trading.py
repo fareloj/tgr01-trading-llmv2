@@ -61,7 +61,19 @@ def backup_db() -> Path | None:
         return None
 
 
-def start_paper_trading(cycles: int = 4320, sleep_seconds: int = 60, backup: bool = True):
+def start_paper_trading(cycles: int = 288, sleep_seconds: int = 900, backup: bool = True):
+    """Run the decision-cycle orchestrator loop.
+
+    sleep_seconds paces how often the Decision Agent / Risk Manager are invoked, not how
+    often market data is ingested. price_worker.py polls Mercado Bitcoin independently
+    (every 30s) to keep 1-minute klines gapless for technical indicators (RSI/MACD/
+    Bollinger/EMA/Volume Profile); it must never be throttled to match this value.
+    Default here is 15 minutes (900s) to match the real BTC/BRL candle refresh cadence on
+    Mercado Bitcoin -- calling the LLM more often than the underlying price actually moves
+    just repeats the same technical snapshot at extra cost with no new information, the same
+    class of waste as re-reading stale news. Default cycles (288) preserves the previous
+    ~3-day default total runtime (288 * 900s = 72h) that 4320 cycles * 60s used to cover.
+    """
     print("=" * 60)
     print("INICIANDO PAPER TRADING ORCHESTRATOR")
     print(f"Meta: {cycles} ciclos simulados rodando em cima de DADOS REAIS.")
@@ -105,8 +117,8 @@ def start_paper_trading(cycles: int = 4320, sleep_seconds: int = 60, backup: boo
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run paper trading cycles against the configured PostgreSQL database.")
-    parser.add_argument("--cycles", type=int, default=4320, help="Number of cycles to run. Default: 4320")
-    parser.add_argument("--sleep", type=int, default=60, help="Seconds between cycles. Default: 60")
+    parser.add_argument("--cycles", type=int, default=288, help="Number of cycles to run. Default: 288 (~3 days at the default 15-minute interval)")
+    parser.add_argument("--sleep", type=int, default=900, help="Seconds between decision cycles. Default: 900 (15 minutes, matching real BTC/BRL candle refresh cadence -- independent of price_worker's own ingestion interval)")
     parser.add_argument("--no-backup", action="store_true", help="Skip the startup/periodic DB backup.")
     return parser.parse_args()
 
