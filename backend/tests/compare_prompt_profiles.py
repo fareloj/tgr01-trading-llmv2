@@ -194,7 +194,12 @@ class PromptProfileRunner:
         return True
 
     def _request_limits(self) -> dict:
-        if self.model.startswith("openai/gpt-oss"):
+        # gpt-oss is a heavy chain-of-thought reasoner: without reasoning_effort=low and a
+        # larger completion budget it reliably spends its whole token budget on internal
+        # reasoning and returns empty/truncated content. Match both naming conventions --
+        # "openai/gpt-oss-*" (LM Studio/HF style) and "gpt-oss:*" (Ollama style) -- so this
+        # doesn't silently regress to the 450-token default when only the model tag differs.
+        if self.model.startswith("openai/gpt-oss") or self.model.startswith("gpt-oss:"):
             return {"max_completion_tokens": 600, "reasoning_effort": "low"}
         return {"max_tokens": 450}
 

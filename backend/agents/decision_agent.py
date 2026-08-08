@@ -256,7 +256,10 @@ class DecisionAgent:
                 "reasoning_effort": "none",
                 "extra_body": {"reasoning_format": "hidden"},
             }
-        if self.model.startswith("openai/gpt-oss"):
+        # Match both naming conventions -- "openai/gpt-oss-*" (LM Studio/HF style) and
+        # "gpt-oss:*" (Ollama style) -- so this doesn't silently fall back to the tiny
+        # default budget below when only the model tag differs.
+        if self.model.startswith("openai/gpt-oss") or self.model.startswith("gpt-oss:"):
             default_budget = "2000" if purpose == "planner" else "3000"
             env_name = "GPT_OSS_PLANNER_MAX_COMPLETION_TOKENS" if purpose == "planner" else "GPT_OSS_MAX_COMPLETION_TOKENS"
             return {
