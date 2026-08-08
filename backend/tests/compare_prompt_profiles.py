@@ -201,6 +201,14 @@ class PromptProfileRunner:
         # doesn't silently regress to the 450-token default when only the model tag differs.
         if self.model.startswith("openai/gpt-oss") or self.model.startswith("gpt-oss:"):
             return {"max_completion_tokens": 600, "reasoning_effort": "low"}
+        if self._is_local_provider():
+            # Every locally/self-hosted reasoning model tried so far (Nemotron, Qwen,
+            # Bonsai, gpt-oss under any tag) reliably spends the whole 450-token hosted
+            # default on hidden chain-of-thought and returns empty/truncated content --
+            # this is not gpt-oss-specific. Hosted Groq keeps the smaller default since it
+            # has not exhibited this failure mode in this harness. reasoning_effort is a
+            # gpt-oss-only parameter, so it is intentionally omitted here.
+            return {"max_tokens": 1500}
         return {"max_tokens": 450}
 
     def run(self, profile: str, payload: dict) -> DecisionOutput:

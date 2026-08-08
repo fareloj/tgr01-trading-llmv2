@@ -266,6 +266,13 @@ class DecisionAgent:
                 "max_completion_tokens": int(os.getenv(env_name, default_budget)),
                 "reasoning_effort": os.getenv("GPT_OSS_REASONING_EFFORT", "low"),
             }
+        if self._is_local_provider():
+            # Every locally/self-hosted reasoning model tried so far (Nemotron, Qwen,
+            # Bonsai, gpt-oss under any tag) reliably spends the whole hosted-Groq default
+            # budget on hidden chain-of-thought and returns empty/truncated content -- this
+            # is not gpt-oss-specific. Hosted Groq keeps the smaller default since it has
+            # not exhibited this failure mode in this harness.
+            return {"max_tokens": 1500 if purpose == "decision" else 900}
         return {"max_tokens": 450 if purpose == "decision" else 300}
 
     def _is_local_provider(self) -> bool:
