@@ -345,6 +345,12 @@ The example `backend/.env.example` selects Ollama's local OpenAI-compatible
 endpoint and `gpt-oss:120b-cloud`. `LLM_*` variables are canonical. Existing
 `GROQ_*` variables remain supported as a legacy fallback for comparisons.
 
+An experimental multi-agent configuration is also documented, but remains
+disabled and shadow-only by default. It assigns `gemma4:31b-cloud` to news
+analysis, `qwen3.5:122b-cloud` to the deterministic eight-hour technical
+context, and `gpt-oss:120b-cloud` to the final decision. This is an evaluation
+plan, not evidence that multiple agents improve trading results.
+
 Start PostgreSQL and initialize the schema:
 
 ```powershell

@@ -15,12 +15,12 @@ PROJECT_DIR = BASE_DIR.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
 from backend.agents.contracts import AnalysisPlan, AnalysisToolResult, DecisionOutput
+from backend.agents.model_config import DEFAULT_DECISION_MODEL, DEFAULT_LLM_BASE_URL
 from backend.features.payload_builder import build_agent_payload
 
 load_dotenv(BASE_DIR / ".env")
 
-DEFAULT_LLM_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_LLM_MODEL = "gpt-oss:120b-cloud"
+DEFAULT_LLM_MODEL = DEFAULT_DECISION_MODEL
 
 GENERIC_HOLD_REASONS = {
     "noticias confusas",

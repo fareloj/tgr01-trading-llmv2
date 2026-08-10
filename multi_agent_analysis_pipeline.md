@@ -35,6 +35,26 @@ Snapshot original -------------------------------------------+       v
 6. Erros, timeouts e respostas invalidas produzem degradacao controlada.
 7. O sistema deve provar ganho sobre o agente unico antes de ganhar autoridade.
 
+## Modelos Iniciais por Papel
+
+A configuracao experimental inicial separa capacidade e custo por funcao:
+
+| Papel | Modelo inicial | Responsabilidade |
+|---|---|---|
+| Noticias | `gemma4:31b-cloud` | Classificar relevancia, impacto, conflitos e lacunas das noticias persistidas |
+| Tecnica 8h | `qwen3.5:122b-cloud` | Interpretar estatisticas calculadas pelo Python e relaciona-las ao contexto noticioso |
+| Decisao final | `gpt-oss:120b-cloud` | Produzir `BUY`, `SELL` ou `HOLD` a partir do snapshot e dos dois relatorios |
+
+Os nomes sao configuraveis por `NEWS_AGENT_MODEL`, `TECHNICAL_AGENT_MODEL` e
+`LLM_MODEL`. A tag exata de cada modelo cloud precisa ser validada na conta
+Ollama usada no experimento. O default da funcionalidade e
+`MULTI_AGENT_ENABLED=false` com `MULTI_AGENT_SHADOW_MODE=true`: os relatorios
+podem ser comparados, mas nao influenciam nem mesmo a execucao paper.
+
+Todos os modelos usam temperatura zero e contratos JSON validados. O Agente de
+Noticias nao recebe instrucao para buscar fatos externos e deve tratar o texto
+das noticias como entrada nao confiavel, inclusive contra prompt injection.
+
 ## Etapa 1: Agente de Noticias
 
 ### Entrada
