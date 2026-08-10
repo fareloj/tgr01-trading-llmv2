@@ -22,6 +22,7 @@ class ArrayMarketData:
     targets: np.ndarray
     horizons_minutes: tuple[int, ...]
     direction_targets: np.ndarray | None = None
+    feature_columns: tuple[str, ...] = FEATURE_COLUMNS
 
     def __post_init__(self) -> None:
         rows = len(self.timestamps)
@@ -31,7 +32,9 @@ class ArrayMarketData:
             raise ValueError("segment_ids must match timestamps")
         if self.is_observed.shape != (rows,):
             raise ValueError("is_observed must match timestamps")
-        if self.features.shape != (rows, len(FEATURE_COLUMNS)):
+        if not self.feature_columns or len(set(self.feature_columns)) != len(self.feature_columns):
+            raise ValueError("feature columns must be non-empty and unique")
+        if self.features.shape != (rows, len(self.feature_columns)):
             raise ValueError("feature matrix has an unexpected shape")
         if self.targets.shape != (rows, len(self.horizons_minutes)):
             raise ValueError("target matrix has an unexpected shape")
@@ -88,10 +91,14 @@ class RobustFeatureScaler:
         cls,
         values: np.ndarray,
         *,
+        feature_columns: Iterable[str] = FEATURE_COLUMNS,
         maximum_fit_rows: int = 1_000_000,
         clip_value: float = 10.0,
     ) -> "RobustFeatureScaler":
-        if values.ndim != 2 or values.shape[1] != len(FEATURE_COLUMNS):
+        columns = tuple(str(column) for column in feature_columns)
+        if not columns or len(set(columns)) != len(columns):
+            raise ValueError("feature columns must be non-empty and unique")
+        if values.ndim != 2 or values.shape[1] != len(columns):
             raise ValueError("values must be a two-dimensional feature matrix")
         if len(values) == 0:
             raise ValueError("cannot fit a scaler on an empty matrix")
@@ -108,6 +115,7 @@ class RobustFeatureScaler:
         return cls(
             median=median.astype(np.float32),
             scale=scale.astype(np.float32),
+            feature_columns=columns,
             clip_value=float(clip_value),
         )
 
@@ -131,11 +139,21 @@ class RobustFeatureScaler:
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> "RobustFeatureScaler":
         columns = tuple(str(item) for item in value["feature_columns"])
-        if columns != FEATURE_COLUMNS:
-            raise ValueError("checkpoint scaler uses a different feature schema")
+        median = np.asarray(value["median"], dtype=np.float32)
+        scale = np.asarray(value["scale"], dtype=np.float32)
+        if (
+            not columns
+            or len(set(columns)) != len(columns)
+            or median.shape != (len(columns),)
+            or scale.shape != (len(columns),)
+            or np.any(~np.isfinite(median))
+            or np.any(~np.isfinite(scale))
+            or np.any(scale <= 0)
+        ):
+            raise ValueError("checkpoint scaler uses an invalid feature schema")
         return cls(
-            median=np.asarray(value["median"], dtype=np.float32),
-            scale=np.asarray(value["scale"], dtype=np.float32),
+            median=median,
+            scale=scale,
             feature_columns=columns,
             clip_value=float(value["clip_value"]),
         )
@@ -203,27 +221,32 @@ def load_market_arrays(
     horizons_minutes: Iterable[int],
     *,
     direction_targets_path: Path | None = None,
+    feature_columns: Iterable[str] = FEATURE_COLUMNS,
+    timeframe_seconds: int = 60,
 ) -> ArrayMarketData:
     horizons = tuple(int(item) for item in horizons_minutes)
+    columns = tuple(str(column) for column in feature_columns)
     if not horizons or any(item <= 0 for item in horizons):
         raise ValueError("horizons must contain positive minute values")
+    if not columns or len(set(columns)) != len(columns) or timeframe_seconds <= 0:
+        raise ValueError("feature columns or timeframe are invalid")
     target_columns = [f"future_return_{item}m_pct" for item in horizons]
-    use_columns = ["timestamp", "segment_id", "is_observed", *FEATURE_COLUMNS, *target_columns]
+    use_columns = ["timestamp", "segment_id", "is_observed", *columns, *target_columns]
     dtypes = {
         "timestamp": "int64",
         "segment_id": "int64",
         "is_observed": "boolean",
-        **{column: "float32" for column in FEATURE_COLUMNS},
+        **{column: "float32" for column in columns},
         **{column: "float32" for column in target_columns},
     }
     frame = pd.read_csv(path, usecols=use_columns, dtype=dtypes)
-    if frame[["timestamp", "segment_id", "is_observed", *FEATURE_COLUMNS]].isna().any().any():
+    if frame[["timestamp", "segment_id", "is_observed", *columns]].isna().any().any():
         raise ValueError(f"dataset contains missing timestamps, segments, or features: {path}")
     frame = frame.sort_values("timestamp").drop_duplicates("timestamp", keep="last")
     timestamps = frame["timestamp"].to_numpy(dtype=np.int64, copy=True)
     if np.any(np.diff(timestamps) <= 0):
         raise ValueError("dataset timestamps must be strictly increasing")
-    segment_ids = derive_continuous_segments(timestamps)
+    segment_ids = derive_continuous_segments(timestamps, timeframe_seconds=timeframe_seconds)
     direction_targets = None
     if direction_targets_path is not None:
         with np.load(direction_targets_path, allow_pickle=False) as document:
@@ -240,12 +263,13 @@ def load_market_arrays(
         # from the merged timeline prevents false boundaries between files.
         segment_ids=segment_ids,
         is_observed=frame["is_observed"].to_numpy(dtype=bool, copy=True),
-        features=frame[list(FEATURE_COLUMNS)].to_numpy(dtype=np.float32, copy=True),
+        features=frame[list(columns)].to_numpy(dtype=np.float32, copy=True),
         # Missing targets are expected near the end of a continuous segment.
         # They remain in the timeline and are filtered only as sequence ends.
         targets=frame[target_columns].to_numpy(dtype=np.float32, copy=True),
         horizons_minutes=horizons,
         direction_targets=direction_targets,
+        feature_columns=columns,
     )
 
 

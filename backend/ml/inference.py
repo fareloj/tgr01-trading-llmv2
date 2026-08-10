@@ -7,7 +7,6 @@ import numpy as np
 import torch
 
 from backend.ml.checkpoints import load_tcn_checkpoint
-from backend.ml.dataset import FEATURE_COLUMNS
 from backend.ml.tcn import ordered_quantiles
 from backend.ml.training import apply_direction_temperatures
 
@@ -80,7 +79,7 @@ class TCNAdvisor:
                 "execution_eligible": False,
                 "can_authorize_order": False,
             }
-        expected = (self.sequence_length, len(FEATURE_COLUMNS))
+        expected = (self.sequence_length, len(self.feature_scaler.feature_columns))
         if feature_context.shape != expected:
             raise ValueError(f"feature context must have shape {expected}")
         scaled = self.feature_scaler.transform(feature_context)
