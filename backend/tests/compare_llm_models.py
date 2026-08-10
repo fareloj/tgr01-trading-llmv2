@@ -68,7 +68,7 @@ def build_messages(payload: dict, prompt_mode: str) -> list[dict]:
 def provider_client(provider: str) -> tuple[OpenAI | None, str]:
     provider = provider.lower()
     if provider == "groq":
-        keys = load_api_keys()
+        keys = load_api_keys(("GROQ_API_KEY",))
         key = keys[0] if keys else ""
         base_url = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
     elif provider == "openrouter":

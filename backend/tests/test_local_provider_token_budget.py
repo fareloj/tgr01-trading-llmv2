@@ -26,14 +26,14 @@ LOCAL_NON_GPT_OSS_MODEL_TAGS = [
 
 @pytest.fixture
 def local_env(monkeypatch):
-    monkeypatch.setenv("GROQ_BASE_URL", "http://localhost:11434/v1")
-    monkeypatch.setenv("GROQ_API_KEY", "ollama-local")
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_API_KEY", "ollama-local")
 
 
 @pytest.fixture
 def hosted_env(monkeypatch):
-    monkeypatch.setenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
-    monkeypatch.setenv("GROQ_API_KEY", "gsk_fake_test_key")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
+    monkeypatch.setenv("LLM_API_KEY", "gsk_fake_test_key")
 
 
 class TestDecisionAgentLocalBudget:

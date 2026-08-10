@@ -12,7 +12,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR.parent))
 
 from backend.agents.contracts import DecisionOutput
-from backend.agents.decision_agent import load_api_keys
+from backend.agents.decision_agent import DEFAULT_LLM_MODEL, load_api_keys, resolve_llm_base_url
 from backend.features.payload_builder import build_news_risk
 from backend.risk.risk_manager import RiskManager
 
@@ -159,11 +159,11 @@ class PromptProfileRunner:
     def __init__(self):
         self.api_keys = load_api_keys()
         if not self.api_keys:
-            raise RuntimeError("Nenhuma chave Groq configurada em backend/.env; este harness precisa chamar o LLM.")
+            raise RuntimeError("Nenhuma credencial LLM configurada em backend/.env; este harness precisa chamar o LLM.")
         self.key_index = 0
-        self.base_url = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+        self.base_url = resolve_llm_base_url()
         self.client = self._build_client()
-        self.model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+        self.model = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
         self.schema_instructions = (
             "Retorne APENAS um JSON valido seguindo este schema:\n"
             f"{json.dumps(DecisionOutput.model_json_schema())}"

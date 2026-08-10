@@ -19,6 +19,9 @@ from backend.features.payload_builder import build_agent_payload
 
 load_dotenv(BASE_DIR / ".env")
 
+DEFAULT_LLM_BASE_URL = "http://localhost:11434/v1"
+DEFAULT_LLM_MODEL = "gpt-oss:120b-cloud"
+
 GENERIC_HOLD_REASONS = {
     "noticias confusas",
     "notícias confusas",
@@ -40,30 +43,53 @@ class ToolAugmentedEvaluation:
     tool_results: list[AnalysisToolResult]
 
 
-def load_api_keys() -> list[str]:
-    """Read LLM keys without printing secrets."""
-    keys = []
+def load_api_keys(prefixes: tuple[str, ...] = ("LLM_API_KEY", "GROQ_API_KEY")) -> list[str]:
+    """Read canonical LLM credentials, retaining legacy Groq compatibility."""
+    for prefix in prefixes:
+        keys = []
+        raw_keys = os.getenv(f"{prefix}S", "")
+        if raw_keys:
+            keys.extend(part.strip() for part in re.split(r"[,;\n]+", raw_keys) if part.strip())
 
-    raw_keys = os.getenv("GROQ_API_KEYS", "")
-    if raw_keys:
-        keys.extend(part.strip() for part in re.split(r"[,;\n]+", raw_keys) if part.strip())
+        single_key = os.getenv(prefix, "").strip()
+        if single_key:
+            keys.append(single_key)
 
-    single_key = os.getenv("GROQ_API_KEY", "").strip()
-    if single_key:
-        keys.append(single_key)
+        for index in range(1, 11):
+            key = os.getenv(f"{prefix}_{index}", "").strip()
+            if key:
+                keys.append(key)
 
-    for index in range(1, 11):
-        key = os.getenv(f"GROQ_API_KEY_{index}", "").strip()
-        if key:
-            keys.append(key)
+        unique_keys = []
+        seen = set()
+        for key in keys:
+            if key not in seen:
+                unique_keys.append(key)
+                seen.add(key)
+        if unique_keys:
+            return unique_keys
+    return []
 
-    unique_keys = []
-    seen = set()
-    for key in keys:
-        if key not in seen:
-            unique_keys.append(key)
-            seen.add(key)
-    return unique_keys
+
+def resolve_llm_base_url() -> str:
+    """Return the canonical endpoint, with GROQ_BASE_URL as a legacy fallback."""
+    return os.getenv("LLM_BASE_URL") or os.getenv("GROQ_BASE_URL") or DEFAULT_LLM_BASE_URL
+
+
+def describe_llm_provider(base_url: str | None = None) -> str:
+    """Return a stable, non-secret provider label for campaign fingerprints."""
+    normalized = (base_url or resolve_llm_base_url()).lower().rstrip("/")
+    if "localhost:11434" in normalized or "127.0.0.1:11434" in normalized:
+        return "ollama"
+    if "localhost:1234" in normalized or "127.0.0.1:1234" in normalized:
+        return "lmstudio"
+    if "api.groq.com" in normalized:
+        return "groq"
+    if "openrouter.ai" in normalized:
+        return "openrouter"
+    if "localhost" in normalized or "127.0.0.1" in normalized:
+        return "local-openai-compatible"
+    return "openai-compatible"
 
 
 def has_llm_api_key() -> bool:
@@ -236,8 +262,8 @@ class DecisionAgent:
     def __init__(self):
         self.api_keys = load_api_keys()
         self.api_key_index = 0
-        self.base_url = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
-        self.model = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+        self.base_url = resolve_llm_base_url()
+        self.model = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
         self.client = self._build_client()
 
     def _build_client(self):

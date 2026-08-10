@@ -18,7 +18,9 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from backend.agents.decision_agent import (
+    DEFAULT_LLM_MODEL,
     DecisionAgent,
+    describe_llm_provider,
     enforce_payload_decision_constraints,
     has_llm_api_key,
     replace_generic_hold_reason,
@@ -60,7 +62,8 @@ def sha256_text(value: str) -> str:
 
 def variant_descriptors(variants: list[str]) -> list[dict]:
     descriptors = []
-    model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+    model = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
+    provider = describe_llm_provider()
     for variant in variants:
         if variant == "current":
             source = inspect.getsource(DecisionAgent.evaluate_market)
@@ -68,7 +71,7 @@ def variant_descriptors(variants: list[str]) -> list[dict]:
                 {
                     "name": variant,
                     "kind": "production",
-                    "provider": "groq",
+                    "provider": provider,
                     "model": model,
                     "prompt_sha256": sha256_text(source),
                 }
@@ -78,7 +81,7 @@ def variant_descriptors(variants: list[str]) -> list[dict]:
                 {
                     "name": variant,
                     "kind": "prompt_profile",
-                    "provider": "groq",
+                    "provider": provider,
                     "model": model,
                     "prompt_sha256": sha256_text(PROMPT_PROFILES[variant]),
                 }

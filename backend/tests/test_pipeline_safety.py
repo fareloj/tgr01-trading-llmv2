@@ -545,14 +545,25 @@ def test_parse_retry_seconds_from_rate_limit_message():
 
 
 def test_load_api_keys_supports_list_and_numbered_vars(monkeypatch):
-    for index in range(1, 11):
-        monkeypatch.delenv(f"GROQ_API_KEY_{index}", raising=False)
-    monkeypatch.setenv("GROQ_API_KEYS", "key_a,key_b;key_a")
-    monkeypatch.setenv("GROQ_API_KEY", "key_single")
-    monkeypatch.setenv("GROQ_API_KEY_1", "key_1")
-    monkeypatch.setenv("GROQ_API_KEY_2", "key_2")
+    for prefix in ("LLM_API_KEY", "GROQ_API_KEY"):
+        monkeypatch.delenv(prefix, raising=False)
+        monkeypatch.delenv(f"{prefix}S", raising=False)
+        for index in range(1, 11):
+            monkeypatch.delenv(f"{prefix}_{index}", raising=False)
+    monkeypatch.setenv("LLM_API_KEYS", "key_a,key_b;key_a")
+    monkeypatch.setenv("LLM_API_KEY", "key_single")
+    monkeypatch.setenv("LLM_API_KEY_1", "key_1")
+    monkeypatch.setenv("LLM_API_KEY_2", "key_2")
 
     assert load_api_keys() == ["key_a", "key_b", "key_single", "key_1", "key_2"]
+
+
+def test_load_api_keys_does_not_mix_canonical_and_legacy_providers(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "ollama-placeholder")
+    monkeypatch.setenv("GROQ_API_KEY", "groq-key")
+
+    assert load_api_keys() == ["ollama-placeholder"]
+    assert load_api_keys(("GROQ_API_KEY",)) == ["groq-key"]
 
 
 def test_payload_snapshot_keeps_auditable_fields():

@@ -147,6 +147,16 @@ def test_prompt_profile_runner_uses_bounded_gpt_oss_output_and_rotates_keys():
     assert runner._rotate_key() is False
 
 
+def test_campaign_descriptor_records_the_effective_ollama_provider(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_MODEL", "gpt-oss:120b-cloud")
+
+    descriptor = campaign_runner.variant_descriptors(["balanced"])[0]
+
+    assert descriptor["provider"] == "ollama"
+    assert descriptor["model"] == "gpt-oss:120b-cloud"
+
+
 def test_campaign_retry_retries_fail_closed_technical_decision(monkeypatch):
     decisions = [
         SimpleNamespace(action="HOLD", reasoning="LLM technical failure: RateLimitError"),

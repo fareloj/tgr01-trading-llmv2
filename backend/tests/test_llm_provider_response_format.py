@@ -17,15 +17,15 @@ from backend.tests.compare_prompt_profiles import PromptProfileRunner
 
 @pytest.fixture
 def local_env(monkeypatch):
-    monkeypatch.setenv("GROQ_BASE_URL", "http://localhost:1234/v1")
-    monkeypatch.setenv("GROQ_API_KEY", "lm-studio-local")
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:1234/v1")
+    monkeypatch.setenv("LLM_API_KEY", "lm-studio-local")
     monkeypatch.setenv("LLM_MODEL", "openai/gpt-oss-20b")
 
 
 @pytest.fixture
 def hosted_env(monkeypatch):
-    monkeypatch.setenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
-    monkeypatch.setenv("GROQ_API_KEY", "gsk_fake_test_key")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
+    monkeypatch.setenv("LLM_API_KEY", "gsk_fake_test_key")
     monkeypatch.setenv("LLM_MODEL", "openai/gpt-oss-120b")
 
 
@@ -51,17 +51,21 @@ class TestDecisionAgentResponseFormat:
         assert agent._response_format(DecisionOutput, "decision_output") == {"type": "json_object"}
 
     def test_127_0_0_1_is_treated_as_local(self, monkeypatch):
-        monkeypatch.setenv("GROQ_BASE_URL", "http://127.0.0.1:1234/v1")
-        monkeypatch.setenv("GROQ_API_KEY", "lm-studio-local")
+        monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:1234/v1")
+        monkeypatch.setenv("LLM_API_KEY", "lm-studio-local")
         agent = DecisionAgent()
         assert agent._is_local_provider() is True
 
-    def test_default_base_url_is_hosted(self, monkeypatch):
+    def test_default_base_url_is_ollama(self, monkeypatch):
+        monkeypatch.delenv("LLM_BASE_URL", raising=False)
         monkeypatch.delenv("GROQ_BASE_URL", raising=False)
-        monkeypatch.setenv("GROQ_API_KEY", "gsk_fake_test_key")
+        monkeypatch.setenv("LLM_API_KEY", "ollama")
+        monkeypatch.delenv("LLM_MODEL", raising=False)
         agent = DecisionAgent()
-        assert agent._is_local_provider() is False
-        assert agent._response_format(DecisionOutput, "decision_output") == {"type": "json_object"}
+        assert agent.base_url == "http://localhost:11434/v1"
+        assert agent.model == "gpt-oss:120b-cloud"
+        assert agent._is_local_provider() is True
+        assert agent._response_format(DecisionOutput, "decision_output")["type"] == "json_schema"
 
 
 class TestPromptProfileRunnerResponseFormat:

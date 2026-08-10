@@ -30,7 +30,8 @@ NON_GPT_OSS_MODEL_TAGS = [
 
 @pytest.fixture
 def env(monkeypatch):
-    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
     monkeypatch.delenv("GROQ_BASE_URL", raising=False)
 
 

@@ -24,7 +24,7 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Execution | Paper trading only |
 | Real exchange orders | Not implemented |
 | Active database | PostgreSQL 16 |
-| Default decision model | `openai/gpt-oss-120b` through an OpenAI-compatible Groq endpoint |
+| Experimental decision model | `gpt-oss:120b-cloud` through the local Ollama OpenAI-compatible endpoint |
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
 | RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
@@ -34,6 +34,13 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 These test counts describe the state recorded on 2026-08-04. They validate
 contracts, failure behavior, accounting, and interfaces. They do not measure
 future returns.
+
+The Ollama Cloud GPT-OSS 120B configuration is the current **paper-only test
+successor** to hosted Groq and GPT-OSS 20B in local LM Studio. Its large free
+quota removes the main campaign bottleneck, and a 300-call development run
+completed 299 valid responses with one malformed output. That is useful
+engineering evidence, not model selection proof: validation and sealed holdout
+campaigns are still pending, and the model is not approved for real trading.
 
 The accepted paper-only boundary and known limitations are documented in
 [Final Acceptance](docs/reports/FINAL_ACCEPTANCE.md). The latest adversarial
@@ -322,6 +329,7 @@ Requirements:
 - Docker Desktop or another Docker Compose runtime;
 - Node.js for the Electron interface;
 - one compatible LLM API key for decision experiments.
+- Ollama signed in locally when using the experimental cloud-model default.
 
 Create local configuration files:
 
@@ -332,6 +340,10 @@ Copy-Item .\backend\.env.example .\backend\.env
 
 Set a strong local PostgreSQL password and keep `DATABASE_URL` consistent.
 Never commit either `.env` file.
+
+The example `backend/.env.example` selects Ollama's local OpenAI-compatible
+endpoint and `gpt-oss:120b-cloud`. `LLM_*` variables are canonical. Existing
+`GROQ_*` variables remain supported as a legacy fallback for comparisons.
 
 Start PostgreSQL and initialize the schema:
 
