@@ -116,3 +116,42 @@ class AnalysisToolResult(StrictToolContract):
     error_code: str | None = Field(default=None, max_length=80)
     latency_ms: float = Field(ge=0)
     audit_persisted: bool | None = None
+
+
+class NewsAnalysis(StrictToolContract):
+    status: Literal["OK", "NO_NEWS", "DEGRADED"]
+    bias: Literal["POSITIVE", "NEGATIVE", "NEUTRAL", "UNCERTAIN"]
+    confidence: int = Field(ge=0, le=100)
+    summary: str = Field(max_length=480)
+    evidence_news_ids: list[str] = Field(default_factory=list, max_length=8)
+    conflicts: list[str] = Field(default_factory=list, max_length=3)
+    gaps: list[str] = Field(default_factory=list, max_length=3)
+    untrusted_instruction_detected: bool = False
+
+
+class TechnicalAnalysis(StrictToolContract):
+    status: Literal["OK", "INSUFFICIENT_DATA", "DEGRADED"]
+    regime: Literal[
+        "UPTREND",
+        "DOWNTREND",
+        "SIDEWAYS",
+        "HIGH_VOLATILITY",
+        "MIXED",
+        "INSUFFICIENT_DATA",
+    ]
+    direction: Literal["BULLISH", "BEARISH", "NEUTRAL", "UNCERTAIN"]
+    confidence: int = Field(ge=0, le=100)
+    summary: str = Field(max_length=480)
+    evidence_fields: list[str] = Field(default_factory=list, max_length=8)
+    counter_evidence: list[str] = Field(default_factory=list, max_length=4)
+    news_alignment: Literal["ALIGNED", "CONFLICTING", "PARTIAL", "UNRELATED", "UNAVAILABLE"]
+    invalidation_conditions: list[str] = Field(default_factory=list, max_length=4)
+
+
+class MultiAgentDecision(StrictToolContract):
+    action: Literal["BUY", "SELL", "HOLD"]
+    conviction: int = Field(ge=0, le=80)
+    thesis: str = Field(max_length=360)
+    evidence_fields: list[str] = Field(default_factory=list, max_length=8)
+    counter_evidence: list[str] = Field(default_factory=list, max_length=4)
+    invalidation_conditions: list[str] = Field(default_factory=list, max_length=4)

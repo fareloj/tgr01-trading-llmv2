@@ -559,6 +559,11 @@ def test_load_api_keys_supports_list_and_numbered_vars(monkeypatch):
 
 
 def test_load_api_keys_does_not_mix_canonical_and_legacy_providers(monkeypatch):
+    for prefix in ("LLM_API_KEY", "GROQ_API_KEY"):
+        monkeypatch.delenv(prefix, raising=False)
+        monkeypatch.delenv(f"{prefix}S", raising=False)
+        for index in range(1, 11):
+            monkeypatch.delenv(f"{prefix}_{index}", raising=False)
     monkeypatch.setenv("LLM_API_KEY", "ollama-placeholder")
     monkeypatch.setenv("GROQ_API_KEY", "groq-key")
 

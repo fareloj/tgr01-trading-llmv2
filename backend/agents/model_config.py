@@ -9,7 +9,7 @@ from dataclasses import dataclass
 DEFAULT_LLM_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_DECISION_MODEL = "gpt-oss:120b-cloud"
 DEFAULT_NEWS_MODEL = "gpt-oss:20b-cloud"
-DEFAULT_TECHNICAL_MODEL = "qwen3.5:122b-cloud"
+DEFAULT_TECHNICAL_MODEL = "gpt-oss:20b-cloud"
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}

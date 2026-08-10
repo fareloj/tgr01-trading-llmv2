@@ -41,7 +41,7 @@ def test_default_role_assignments_match_experimental_cloud_models():
     config = resolve_multi_agent_model_config()
 
     assert config.news_model == "gpt-oss:20b-cloud"
-    assert config.technical_model == "qwen3.5:122b-cloud"
+    assert config.technical_model == "gpt-oss:20b-cloud"
     assert config.decision_model == "gpt-oss:120b-cloud"
 
 

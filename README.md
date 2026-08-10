@@ -225,6 +225,17 @@ horizon. This result supports keeping news as risk context; it does not justify
 loosening the Risk Manager or using real funds. See the full
 [paired news-mode comparison](docs/reports/HISTORICAL_NEWS_MODE_COMPARISON_2026-08-04.md).
 
+### Experimental multi-agent validation
+
+The shadow-only multi-agent prototype assigns GPT-OSS 20B to bounded news and
+technical interpretation and GPT-OSS 120B to the final proposal. A frozen
+50-snapshot validation produced seven Risk-approved directional actions: four
+were favorable and three unfavorable after configured costs. Five of 50 final
+outputs violated the stricter stale-news/evidence contract and failed closed or
+were already HOLD. This is useful safety evidence, not evidence of a profitable
+strategy. See the complete
+[multi-agent historical validation](docs/reports/MULTI_AGENT_HISTORICAL_VALIDATION_2026-08-10.md).
+
 ## LLM Analysis Tools
 
 An optional protocol lets the model request up to three bounded calculations:
@@ -347,12 +358,13 @@ endpoint and `gpt-oss:120b-cloud`. `LLM_*` variables are canonical. Existing
 
 An experimental multi-agent configuration is also documented, but remains
 disabled and shadow-only by default. It assigns `gpt-oss:20b-cloud` to news
-analysis, `qwen3.5:122b-cloud` to the deterministic eight-hour technical
-context, and `gpt-oss:120b-cloud` to the final decision. This is an evaluation
-plan, not evidence that multiple agents improve trading results. The news
-model remains a test candidate and its output must retain links to the original
-persisted headline IDs; a smaller Qwen remains a shadow benchmark rather than
-an approved replacement.
+analysis and interpretation of the deterministic eight-hour technical context,
+and `gpt-oss:120b-cloud` to the final decision. Qwen Cloud was unavailable on
+the tested account and accessible Nemotron variants did not reliably satisfy
+the full technical JSON contract. This is an evaluation configuration, not
+evidence that multiple agents improve trading results. Outputs retain source
+IDs and the final model also receives the original snapshot to reduce correlated
+summary risk.
 
 Start PostgreSQL and initialize the schema:
 
