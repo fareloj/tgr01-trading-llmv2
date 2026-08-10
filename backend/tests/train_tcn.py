@@ -19,6 +19,10 @@ if str(PROJECT_DIR) not in sys.path:
 
 from backend.ml.dataset import FEATURE_COLUMNS
 from backend.ml.checkpoints import save_tcn_checkpoint
+from backend.ml.policy import (
+    evaluate_probability_policy,
+    fit_probability_policy,
+)
 from backend.ml.sequences import (
     ArrayMarketData,
     DeviceMarketData,
@@ -541,6 +545,19 @@ def main() -> int:
         actionable_move_pct=0.20,
         actual_classes=calibration_direction_targets,
     )
+    calibrated_calibration_logits = apply_direction_temperatures(
+        calibration_direction_logits,
+        direction_temperatures,
+    )
+    probability_policy, probability_policy_calibration = fit_probability_policy(
+        calibrated_calibration_logits,
+        calibration_targets,
+        local_data.timestamps[local_indices["calibration"]],
+        horizon_index=0,
+        horizon_minutes=15,
+        round_trip_cost_pct=0.15,
+        direction_targets=calibration_direction_targets,
+    )
     checkpoint_payload = {
         **provenance,
         "local_dataset": local_fingerprint,
@@ -555,6 +572,8 @@ def main() -> int:
         "calibration_quantile_metrics": calibration_quantile_metrics,
         "calibration_direction_metrics": calibration_direction_metrics,
         "calibration_direction_metrics_uncalibrated": calibration_direction_metrics_uncalibrated,
+        "probability_policy": probability_policy.as_dict(),
+        "probability_policy_calibration": probability_policy_calibration,
         "test_evaluated": bool(args.evaluate_test),
         "boundary": (
             "Offline research checkpoint only. It cannot place paper or live orders and remains "
@@ -601,6 +620,16 @@ def main() -> int:
             round_trip_cost_pct=0.15,
         )
         checkpoint_payload["test_policy_15m"] = report["test_policy_15m"]
+        report["test_probability_policy_15m"] = evaluate_probability_policy(
+            apply_direction_temperatures(test_direction_logits, direction_temperatures),
+            targets,
+            local_data.timestamps[local_indices["test"]],
+            probability_policy,
+            direction_targets=test_direction_targets,
+        )
+        checkpoint_payload["test_probability_policy_15m"] = report[
+            "test_probability_policy_15m"
+        ]
     save_tcn_checkpoint(output_dir / "local_best.pt", model, checkpoint_payload)
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "training_report.json"
@@ -616,6 +645,7 @@ def main() -> int:
     )
     print(json.dumps(report.get("test_quantile_metrics", {}), indent=2))
     print(json.dumps(report.get("test_policy_15m", {}), indent=2))
+    print(json.dumps(report.get("test_probability_policy_15m", {}), indent=2))
     print(f"checkpoint={output_dir / 'local_best.pt'}")
     print(f"report={report_path}")
     return 0
