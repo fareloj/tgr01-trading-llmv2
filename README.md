@@ -22,7 +22,7 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | --- | --- |
 | Market | BTC/BRL, one-minute public data from Mercado Bitcoin; 15-minute decision cadence |
 | Execution | Paper trading only |
-| Real exchange orders | Not implemented |
+| Real exchange orders | Not implemented; authenticated BUY/SELL validation is dry-run only |
 | Active database | PostgreSQL 16 |
 | Experimental decision model | `gpt-oss:120b-cloud` through the local Ollama OpenAI-compatible endpoint |
 | Operator interfaces | Python/Textual TUI and Electron console |
@@ -119,6 +119,26 @@ gate still has final authority.
 Paper orders run inside one PostgreSQL transaction. The audit stores expected
 and effective price, fee, slippage, BRL/BTC deltas, average cost, realized PnL,
 equity before and after execution, the LLM evidence brief, and the risk verdict.
+
+### Authenticated exchange dry-run
+
+The optional Mercado Bitcoin validator authenticates with OAuth2 and reads the
+configured account's balances, BTC/BRL fees, public symbol limits, and current
+orderbook. It then builds and checks one market BUY candidate and one market
+SELL candidate. The estimates are snapshots, not execution guarantees.
+
+The client intentionally implements no order, cancellation, transfer, or
+withdrawal method. Its only POST is the OAuth token exchange; all exchange data
+operations are GET requests. `REAL_TRADING_ENABLED` must remain `false`.
+
+```powershell
+py -3.11 .\backend\tests\validate_mb_order_dry_run.py `
+  --buy-brl 1.00 --sell-btc 0.00000150
+```
+
+A blocked candidate is a valid safety outcome. For example, an account with no
+available BTC can validate the SELL schema and market constraints in tests, but
+the live dry-run will block it on the real balance before any submission.
 
 ## Evaluation, Not An "Accuracy" Number
 
