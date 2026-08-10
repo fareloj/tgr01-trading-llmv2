@@ -37,6 +37,14 @@ def test_defaults_are_disabled_and_shadow_only():
     assert config.decision_model == DEFAULT_DECISION_MODEL
 
 
+def test_default_role_assignments_match_experimental_cloud_models():
+    config = resolve_multi_agent_model_config()
+
+    assert config.news_model == "gpt-oss:20b-cloud"
+    assert config.technical_model == "qwen3.5:122b-cloud"
+    assert config.decision_model == "gpt-oss:120b-cloud"
+
+
 def test_role_models_and_endpoint_can_be_overridden(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
     monkeypatch.setenv("NEWS_AGENT_MODEL", "news-test")

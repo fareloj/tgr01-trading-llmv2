@@ -41,7 +41,7 @@ A configuracao experimental inicial separa capacidade e custo por funcao:
 
 | Papel | Modelo inicial | Responsabilidade |
 |---|---|---|
-| Noticias | `gemma4:31b-cloud` | Classificar relevancia, impacto, conflitos e lacunas das noticias persistidas |
+| Noticias | `gpt-oss:20b-cloud` | Classificar relevancia, impacto, conflitos e lacunas das noticias persistidas |
 | Tecnica 8h | `qwen3.5:122b-cloud` | Interpretar estatisticas calculadas pelo Python e relaciona-las ao contexto noticioso |
 | Decisao final | `gpt-oss:120b-cloud` | Produzir `BUY`, `SELL` ou `HOLD` a partir do snapshot e dos dois relatorios |
 
@@ -54,6 +54,11 @@ podem ser comparados, mas nao influenciam nem mesmo a execucao paper.
 Todos os modelos usam temperatura zero e contratos JSON validados. O Agente de
 Noticias nao recebe instrucao para buscar fatos externos e deve tratar o texto
 das noticias como entrada nao confiavel, inclusive contra prompt injection.
+O GPT-OSS 20B e apenas o candidato inicial deste papel: sua menor demanda de
+quota e o contrato estruturado precisam ser comparados em shadow mode com um
+Qwen menor antes de qualquer promocao. O relatorio sempre preserva os IDs e as
+manchetes originais para reduzir propagacao de erro entre agentes da mesma
+familia.
 
 ## Etapa 1: Agente de Noticias
 

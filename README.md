@@ -346,10 +346,13 @@ endpoint and `gpt-oss:120b-cloud`. `LLM_*` variables are canonical. Existing
 `GROQ_*` variables remain supported as a legacy fallback for comparisons.
 
 An experimental multi-agent configuration is also documented, but remains
-disabled and shadow-only by default. It assigns `gemma4:31b-cloud` to news
+disabled and shadow-only by default. It assigns `gpt-oss:20b-cloud` to news
 analysis, `qwen3.5:122b-cloud` to the deterministic eight-hour technical
 context, and `gpt-oss:120b-cloud` to the final decision. This is an evaluation
-plan, not evidence that multiple agents improve trading results.
+plan, not evidence that multiple agents improve trading results. The news
+model remains a test candidate and its output must retain links to the original
+persisted headline IDs; a smaller Qwen remains a shadow benchmark rather than
+an approved replacement.
 
 Start PostgreSQL and initialize the schema:
 

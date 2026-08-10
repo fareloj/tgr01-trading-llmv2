@@ -18,6 +18,7 @@ GPT_OSS_MODEL_TAGS = [
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
     "gpt-oss:20b",
+    "gpt-oss:20b-cloud",
     "gpt-oss:120b-cloud",
 ]
 
