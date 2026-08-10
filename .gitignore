@@ -19,6 +19,7 @@ ENV/
 .env
 *.env
 backend/.env
+key-excluir-apos-usar.txt
 
 # Runtime databases and generated state
 *.db
