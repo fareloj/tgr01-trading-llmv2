@@ -1,6 +1,14 @@
+import sys
 import time
+from pathlib import Path
 
 import requests
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from backend.core.tls import configure_native_ca_store
+from backend.core.market_policy import MARKET_DATA_MAX_AGE_SECONDS
 
 
 class StaleDataError(Exception):
@@ -9,6 +17,7 @@ class StaleDataError(Exception):
 
 class MBDataGateway:
     def __init__(self):
+        configure_native_ca_store()
         self.base_url_v4 = "https://api.mercadobitcoin.net/api/v4"
         self.timeout = 5.0
 
@@ -59,8 +68,11 @@ class MBDataGateway:
             age_seconds = to_ts - candle["timestamp"]
             if age_seconds < -60:
                 raise StaleDataError(f"Candle esta no futuro: age={age_seconds}s.")
-            if age_seconds > 300:
-                raise StaleDataError(f"Candle atrasado: age={age_seconds}s > 300s.")
+            if age_seconds > MARKET_DATA_MAX_AGE_SECONDS:
+                raise StaleDataError(
+                    f"Candle atrasado: age={age_seconds}s > "
+                    f"{MARKET_DATA_MAX_AGE_SECONDS}s."
+                )
             return candle
         except StaleDataError:
             raise

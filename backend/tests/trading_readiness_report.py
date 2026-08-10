@@ -13,6 +13,7 @@ from backend.agents.decision_agent import load_api_keys
 from sqlalchemy import func, select
 
 from backend.core import database
+from backend.core.market_policy import MARKET_DATA_MAX_AGE_SECONDS
 from backend.core.database import init_db
 from backend.core.db_models import (
     klines,
@@ -60,10 +61,15 @@ def current_data_report(blockers: list[str], warnings: list[str]):
     else:
         age = now - int(latest_kline["timestamp"])
         print(f"Kline: {local_dt(latest_kline['timestamp'])} age={age}s close={latest_kline['close']}")
-        if age > 300:
-            blockers.append(f"Candle stale: {age}s > 300s.")
-        elif age > 120:
-            warnings.append(f"Candle fresco, mas acima de 120s: {age}s.")
+        if age > MARKET_DATA_MAX_AGE_SECONDS:
+            blockers.append(
+                f"Candle stale: {age}s > {MARKET_DATA_MAX_AGE_SECONDS}s."
+            )
+        elif age > MARKET_DATA_MAX_AGE_SECONDS // 2:
+            warnings.append(
+                "Candle ainda aceito, mas acima de metade do limite: "
+                f"{age}s > {MARKET_DATA_MAX_AGE_SECONDS // 2}s."
+            )
 
     with database.engine.connect() as conn:
         latest_news = conn.execute(

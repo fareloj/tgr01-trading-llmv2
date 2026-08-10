@@ -20,7 +20,7 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 
 | Area | Status |
 | --- | --- |
-| Market | BTC/BRL, one-minute public data from Mercado Bitcoin |
+| Market | BTC/BRL, one-minute public data from Mercado Bitcoin; 15-minute decision cadence |
 | Execution | Paper trading only |
 | Real exchange orders | Not implemented |
 | Active database | PostgreSQL 16 |
@@ -28,10 +28,10 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
 | RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
-| Latest backend validation | 231 Python tests passing |
+| Latest backend validation | 312 Python tests passing |
 | Latest desktop validation | 6 Node tests, Vite build, and Electron smoke passing |
 
-These test counts describe the state recorded on 2026-08-04. They validate
+These test counts describe the state recorded on 2026-08-10. They validate
 contracts, failure behavior, accounting, and interfaces. They do not measure
 future returns.
 
@@ -383,8 +383,28 @@ py -3.11 .\backend\tests\preflight_data_date.py --require-news-today --require-w
 Run paper trading only after preflight passes:
 
 ```powershell
-py -3.11 .\backend\tests\run_paper_trading.py --cycles 10 --sleep 30
+py -3.11 .\backend\tests\run_paper_trading.py --cycles 10 --sleep 900
 ```
+
+The worker keeps one-minute candles for indicator continuity. The Decision
+Agent is paced every 15 minutes, and the shared freshness policy accepts at
+most 20 minutes of source publication lag. A stale candle still aborts before
+the model is called. Shorter intervals are diagnostic only and must not be
+treated as independent market observations.
+
+For auditable forward testing, collection and future evaluation are separate
+phases. The finalizer refuses to score horizons that have not matured:
+
+```powershell
+py -3.11 .\backend\ops\run_forward_session.py collect --cycles 96 --sleep 900 --horizons 15,60,240,480
+py -3.11 .\backend\ops\run_forward_session.py finalize --session forward_YYYYMMDD_HHMMSS_utc
+```
+
+Each session records its starting trade-log ID, model configuration, command
+return codes, raw outputs, and a maturity deadline under
+`backend/reports/forward_sessions/`. This remains paper-only. The active live
+runtime is still the single-agent pipeline; the multi-agent configuration is
+recorded as shadow evidence and does not execute orders.
 
 Open the TUI:
 

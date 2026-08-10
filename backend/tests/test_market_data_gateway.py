@@ -57,7 +57,7 @@ def test_gateway_rejects_empty_candle_response(monkeypatch):
 
 def test_gateway_rejects_stale_and_future_candles(monkeypatch):
     monkeypatch.setattr(market_data_gateway.time, "time", lambda: 2000.0)
-    monkeypatch.setattr(market_data_gateway.requests, "get", lambda *args, **kwargs: Response(_payload(1000)))
+    monkeypatch.setattr(market_data_gateway.requests, "get", lambda *args, **kwargs: Response(_payload(500)))
     with pytest.raises(StaleDataError, match="atrasado"):
         MBDataGateway().fetch_latest_kline()
 

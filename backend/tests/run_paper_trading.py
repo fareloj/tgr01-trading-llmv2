@@ -11,16 +11,22 @@ sys.path.insert(0, str(PROJECT_DIR))
 from sqlalchemy.engine import make_url
 
 from backend.core import database
+from backend.core.market_policy import (
+    DECISION_INTERVAL_SECONDS,
+    MARKET_ASSET,
+    MARKET_DATA_MAX_AGE_SECONDS,
+    MARKET_TIMEFRAME,
+)
 from backend.main import run_trading_cycle
 from backend.tests.preflight_data_date import run_preflight
 
 
 def run_startup_preflight() -> int:
     return run_preflight(
-        asset="BTC/BRL",
-        timeframe="1m",
+        asset=MARKET_ASSET,
+        timeframe=MARKET_TIMEFRAME,
         require_news_today=True,
-        max_kline_age_seconds=300,
+        max_kline_age_seconds=MARKET_DATA_MAX_AGE_SECONDS,
         require_workers=True,
         require_clock_sync=True,
         max_clock_skew_seconds=300,
@@ -61,7 +67,11 @@ def backup_db() -> Path | None:
         return None
 
 
-def start_paper_trading(cycles: int = 288, sleep_seconds: int = 900, backup: bool = True):
+def start_paper_trading(
+    cycles: int = 288,
+    sleep_seconds: int = DECISION_INTERVAL_SECONDS,
+    backup: bool = True,
+) -> bool:
     """Run the decision-cycle orchestrator loop.
 
     sleep_seconds paces how often the Decision Agent / Risk Manager are invoked, not how
@@ -111,14 +121,21 @@ def start_paper_trading(cycles: int = 288, sleep_seconds: int = 900, backup: boo
 
     if completed_cycles == cycles:
         print("\n>>> PAPER TRADING COMPLETADO COM SUCESSO! <<<")
+        return True
     else:
         print(f"\n>>> PAPER TRADING INTERROMPIDO: {completed_cycles}/{cycles} ciclos completos. <<<")
+        return False
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run paper trading cycles against the configured PostgreSQL database.")
     parser.add_argument("--cycles", type=int, default=288, help="Number of cycles to run. Default: 288 (~3 days at the default 15-minute interval)")
-    parser.add_argument("--sleep", type=int, default=900, help="Seconds between decision cycles. Default: 900 (15 minutes, matching real BTC/BRL candle refresh cadence -- independent of price_worker's own ingestion interval)")
+    parser.add_argument(
+        "--sleep",
+        type=int,
+        default=DECISION_INTERVAL_SECONDS,
+        help="Seconds between decision cycles (default from DECISION_INTERVAL_SECONDS).",
+    )
     parser.add_argument("--no-backup", action="store_true", help="Skip the startup/periodic DB backup.")
     return parser.parse_args()
 
@@ -130,4 +147,9 @@ if __name__ == "__main__":
         raise SystemExit(preflight_code)
     if not args.no_backup:
         backup_db()
-    start_paper_trading(cycles=args.cycles, sleep_seconds=args.sleep, backup=not args.no_backup)
+    completed = start_paper_trading(
+        cycles=args.cycles,
+        sleep_seconds=args.sleep,
+        backup=not args.no_backup,
+    )
+    raise SystemExit(0 if completed else 1)

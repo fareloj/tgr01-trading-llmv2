@@ -8,10 +8,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_DIR = BASE_DIR.parent
 sys.path.insert(0, str(PROJECT_DIR))
 from backend.core.database import get_db_path
+from backend.core.market_policy import MARKET_DATA_MAX_AGE_SECONDS
 from backend.core.runtime_safety import MAX_FUTURE_MARKET_DATA_SECONDS
 from backend.features.indicators import get_historical_klines, calculate_technical_status
 
-MARKET_DATA_STALE_SECONDS = 300
 NEWS_STALE_SECONDS = 6 * 3600
 FUTURE_NEWS_TOLERANCE_SECONDS = 300
 NEGATIVE_NEWS_TERMS = {
@@ -100,11 +100,11 @@ def build_data_health(df, recent_news: list, now: int | None = None) -> dict:
         "is_market_data_stale": (
             kline_age_seconds is None
             or is_market_data_future
-            or kline_age_seconds > MARKET_DATA_STALE_SECONDS
+            or kline_age_seconds > MARKET_DATA_MAX_AGE_SECONDS
         ),
         "is_market_data_future": is_market_data_future,
         "market_data_future_tolerance_seconds": MAX_FUTURE_MARKET_DATA_SECONDS,
-        "market_data_stale_threshold_seconds": MARKET_DATA_STALE_SECONDS,
+        "market_data_stale_threshold_seconds": MARKET_DATA_MAX_AGE_SECONDS,
         "latest_news_timestamp": latest_news_timestamp,
         "news_age_seconds": news_age_seconds,
         "is_news_stale": news_age_seconds is None or news_age_seconds > NEWS_STALE_SECONDS,

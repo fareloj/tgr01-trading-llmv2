@@ -9,6 +9,7 @@ from backend.tests import ingest_rag_sources, preflight_data_date, run_historica
 from backend.tests import run_paper_trading
 from backend.tests import seed_historical_data, start_workers
 from backend.tests import migrate_sqlite_to_postgres
+from backend.core.market_policy import MARKET_DATA_MAX_AGE_SECONDS
 
 
 def _kline(timestamp: int, close: float = 100000.0) -> dict:
@@ -80,11 +81,23 @@ def test_direct_paper_runner_uses_strict_startup_preflight(monkeypatch):
         "asset": "BTC/BRL",
         "timeframe": "1m",
         "require_news_today": True,
-        "max_kline_age_seconds": 300,
+        "max_kline_age_seconds": MARKET_DATA_MAX_AGE_SECONDS,
         "require_workers": True,
         "require_clock_sync": True,
         "max_clock_skew_seconds": 300,
     }
+
+
+def test_paper_runner_returns_failure_when_cycle_aborts(monkeypatch):
+    monkeypatch.setattr(run_paper_trading, "run_trading_cycle", lambda: False)
+
+    assert run_paper_trading.start_paper_trading(cycles=3, sleep_seconds=0, backup=False) is False
+
+
+def test_paper_runner_returns_success_after_all_cycles(monkeypatch):
+    monkeypatch.setattr(run_paper_trading, "run_trading_cycle", lambda: True)
+
+    assert run_paper_trading.start_paper_trading(cycles=2, sleep_seconds=0, backup=False) is True
 
 
 def test_historical_timestamp_selection_uses_step_spacing():

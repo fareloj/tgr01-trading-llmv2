@@ -274,7 +274,7 @@ def test_news_prompt_injection_is_sanitized_and_blocks_directional_orders():
 
 
 def test_llm_redteam_matrix_contains_directional_and_adversarial_regimes():
-    from backend.tests.redteam_llm_matrix import build_redteam_scenarios
+    from backend.tests.redteam_llm_matrix import allowed_risk_actions, build_redteam_scenarios
 
     scenarios = build_redteam_scenarios()
 
@@ -282,6 +282,8 @@ def test_llm_redteam_matrix_contains_directional_and_adversarial_regimes():
     hostile = scenarios["headline_prompt_injection"]
     assert hostile["news_risk"]["has_untrusted_instruction"] is True
     assert hostile["news_context"][0]["headline"].startswith("[REMOVED:")
+    assert allowed_risk_actions("bearish_clean") == {"SELL", "HOLD"}
+    assert allowed_risk_actions("market_stale_bullish") == {"HOLD"}
 
 
 def test_directional_conviction_is_capped_when_news_is_stale():
@@ -316,7 +318,7 @@ def test_decision_conviction_is_capped_at_global_contract_maximum():
 
 
 def test_payload_marks_stale_news_and_market_data():
-    _insert_candles(30, latest_age_seconds=900)
+    _insert_candles(30, latest_age_seconds=1300)
     _insert_news(age_seconds=30000)
 
     payload = build_agent_payload()
@@ -324,7 +326,7 @@ def test_payload_marks_stale_news_and_market_data():
     assert payload["technical_context"]["status"] == "OK"
     assert payload["data_health"]["is_market_data_stale"] is True
     assert payload["data_health"]["is_news_stale"] is True
-    assert payload["data_health"]["kline_age_seconds"] >= 900
+    assert payload["data_health"]["kline_age_seconds"] >= 1300
     assert payload["data_health"]["news_age_seconds"] >= 30000
 
 

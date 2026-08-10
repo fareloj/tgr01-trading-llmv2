@@ -41,8 +41,6 @@ def command_catalog(since_id: str = "1") -> dict[str, CommandSpec]:
                 "--require-news-today",
                 "--require-workers",
                 "--require-clock-sync",
-                "--max-kline-age-seconds",
-                "300",
             ),
             "Valida relogio, candles, noticias e workers.",
         ),

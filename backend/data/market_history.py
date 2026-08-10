@@ -12,6 +12,8 @@ from typing import Any, Iterable
 
 import requests
 
+from backend.core.tls import configure_native_ca_store
+
 
 MB_CANDLES_URL = "https://api.mercadobitcoin.net/api/v4/candles"
 CSV_FIELDS = (
@@ -167,6 +169,7 @@ class MercadoBitcoinHistoryClient:
         sleep=time.sleep,
         monotonic=time.monotonic,
     ) -> None:
+        configure_native_ca_store()
         self.config = config or DownloadConfig()
         self.session = session or requests.Session()
         self._sleep = sleep

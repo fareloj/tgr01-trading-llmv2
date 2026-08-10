@@ -12,6 +12,7 @@ sys.path.insert(0, str(BACKEND_DIR.parent))
 from backend.core.database import get_connection, get_db_path, init_db, print_db_diagnostics
 from backend.core.clock_sync import check_clock_skew
 from backend.core.db_models import klines, news, system_health
+from backend.core.market_policy import MARKET_DATA_MAX_AGE_SECONDS
 from backend.core.runtime_safety import MAX_FUTURE_MARKET_DATA_SECONDS, assess_worker_heartbeats
 
 
@@ -163,7 +164,11 @@ def parse_args():
     parser.add_argument("--timeframe", default="1m")
     parser.add_argument("--require-news-today", action="store_true")
     parser.add_argument("--require-workers", action="store_true")
-    parser.add_argument("--max-kline-age-seconds", type=int, default=300)
+    parser.add_argument(
+        "--max-kline-age-seconds",
+        type=int,
+        default=MARKET_DATA_MAX_AGE_SECONDS,
+    )
     parser.add_argument("--require-clock-sync", action="store_true")
     parser.add_argument("--max-clock-skew-seconds", type=int, default=300)
     return parser.parse_args()

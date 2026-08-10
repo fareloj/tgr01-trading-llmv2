@@ -56,7 +56,7 @@ def test_failed_preflight_stops_paper_execution():
 
     assert execute_action("paper10", "1", run_command=fake_run) == 7
     assert len(calls) == 1
-    assert calls[0][0][-1] == "300"
+    assert "--max-kline-age-seconds" not in calls[0][0]
 
 
 def test_successful_preflight_allows_paper_execution():

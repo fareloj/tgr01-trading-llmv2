@@ -4,6 +4,8 @@ import time
 
 import requests
 
+from backend.core.tls import configure_native_ca_store
+
 
 DEFAULT_CLOCK_URLS = (
     "https://www.google.com/generate_204",
@@ -13,6 +15,7 @@ DEFAULT_CLOCK_URLS = (
 
 def fetch_http_clock_samples(urls: tuple[str, ...] = DEFAULT_CLOCK_URLS, timeout: float = 5.0) -> list[dict]:
     """Read independent HTTP Date headers without trusting the local wall clock."""
+    configure_native_ca_store()
     samples = []
     for url in urls:
         try:

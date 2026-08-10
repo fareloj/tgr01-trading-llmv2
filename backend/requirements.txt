@@ -3,6 +3,7 @@ python-dotenv>=1.0.0
 pandas>=2.0.0
 openai>=1.0.0
 requests>=2.31.0
+truststore>=0.10.0,<1.0.0
 pytest>=8.0.0
 textual>=6.0.0,<7.0.0
 defusedxml>=0.7.1

@@ -14,6 +14,7 @@ PROJECT_DIR = BASE_DIR.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
 from backend.core.database import init_db
+from backend.core.tls import configure_native_ca_store
 
 DEFAULT_RSS_FEEDS = {
     "Cointelegraph": "https://cointelegraph.com/rss",
@@ -77,6 +78,7 @@ def parse_rss_items(xml_text: str, source: str, limit: int) -> list[dict]:
 
 
 def fetch_real_news(feed_limit: int = 10) -> list[dict]:
+    configure_native_ca_store()
     news = []
     headers = {"User-Agent": "TGR-01-Trading-LLM-V2/0.1"}
 
