@@ -59,6 +59,24 @@ class TemporalRanges:
 
 
 @dataclass(frozen=True)
+class WalkForwardRanges:
+    train: tuple[int, int]
+    selection: tuple[int, int]
+    calibration: tuple[int, int]
+    test: tuple[int, int]
+    purge_minutes: int
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "train": list(self.train),
+            "selection": list(self.selection),
+            "calibration": list(self.calibration),
+            "test": list(self.test),
+            "purge_minutes": self.purge_minutes,
+        }
+
+
+@dataclass(frozen=True)
 class RobustFeatureScaler:
     median: np.ndarray
     scale: np.ndarray
@@ -305,6 +323,70 @@ def split_temporal_bounds(
     if first[1] <= first[0] or second[1] <= second[0]:
         raise ValueError("purge interval produced an empty temporal subrange")
     return first, second
+
+
+def expanding_walk_forward_ranges(
+    timestamps: np.ndarray,
+    *,
+    minimum_train_rows: int,
+    selection_rows: int,
+    calibration_rows: int,
+    test_rows: int,
+    step_rows: int | None = None,
+    purge_minutes: int,
+) -> tuple[WalkForwardRanges, ...]:
+    """Create expanding chronological folds with a purge before every boundary."""
+
+    window_sizes = (minimum_train_rows, selection_rows, calibration_rows, test_rows)
+    if timestamps.ndim != 1 or np.any(np.diff(timestamps) <= 0):
+        raise ValueError("timestamps must be a strictly increasing vector")
+    if any(size <= 0 for size in window_sizes) or purge_minutes < 0:
+        raise ValueError("walk-forward window sizes and purge are invalid")
+    step = test_rows if step_rows is None else step_rows
+    if step <= 0:
+        raise ValueError("walk-forward step must be positive")
+    required_rows = sum(window_sizes)
+    if len(timestamps) < required_rows:
+        raise ValueError("timestamps are too small for one walk-forward fold")
+
+    purge_seconds = purge_minutes * 60
+
+    def purged_end(start: int) -> int:
+        return int(
+            np.searchsorted(
+                timestamps,
+                int(timestamps[start]) - purge_seconds,
+                side="left",
+            )
+        )
+
+    folds = []
+    selection_start = minimum_train_rows
+    while True:
+        calibration_start = selection_start + selection_rows
+        test_start = calibration_start + calibration_rows
+        test_end = test_start + test_rows
+        if test_end > len(timestamps):
+            break
+        fold = WalkForwardRanges(
+            train=(0, purged_end(selection_start)),
+            selection=(selection_start, purged_end(calibration_start)),
+            calibration=(calibration_start, purged_end(test_start)),
+            test=(test_start, test_end),
+            purge_minutes=purge_minutes,
+        )
+        if any(end <= start for start, end in (
+            fold.train,
+            fold.selection,
+            fold.calibration,
+            fold.test,
+        )):
+            raise ValueError("purge interval produced an empty walk-forward partition")
+        folds.append(fold)
+        selection_start += step
+    if not folds:
+        raise ValueError("walk-forward settings produced no folds")
+    return tuple(folds)
 
 
 def continuous_end_indices(

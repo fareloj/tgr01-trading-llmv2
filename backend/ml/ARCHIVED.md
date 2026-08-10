@@ -1,6 +1,7 @@
-# TCN Research Archive
+# TCN Research Boundary
 
-Status: frozen and excluded from the active trading pipeline as of 2026-08-01.
+Status: offline research reopened on 2026-08-09; still excluded from the active
+trading pipeline.
 
 The code in this directory remains reproducible research. It is not imported by
 the live-data paper cycle, Decision Agent, Risk Manager, paper simulator,
@@ -19,9 +20,11 @@ Generated datasets and checkpoints remain ignored under `backend/reports`.
 The experiment ledger is in the
 [TCN research report](../../docs/research/tcn_neural_research_report.md).
 
-## Reopening Criteria
+## Reopening Protocol
 
-Reopen this work only with a versioned proposal that provides:
+The previous experiment failed to demonstrate an economic edge. New work must
+follow the versioned [reopening protocol](../../docs/research/tcn_reopening_protocol.md)
+and provide:
 
 1. additional causal information beyond one-minute OHLCV derivatives;
 2. walk-forward evaluation across multiple market regimes;
@@ -29,5 +32,10 @@ Reopen this work only with a versioned proposal that provides:
 4. confidence intervals and net performance after fees and slippage;
 5. evidence that adding the model improves the frozen pipeline out of sample.
 
-Until all criteria are met, neural output must not enter an LLM payload or any
-order-approval path.
+The first reopening changes align first-touch probabilities with an abstaining,
+cost-aware evaluation policy, select barrier checkpoints by validation
+direction loss, and add purged walk-forward folds. They do not satisfy the
+whole protocol and do not change the operational boundary.
+
+Until every criterion is met on unseen data, neural output must not enter an
+LLM payload or any order-approval path.

@@ -25,6 +25,7 @@ class StageConfig:
     gradient_clip: float = 1.0
     direction_loss_weight: float = 0.25
     actionable_move_pct: float = 0.20
+    selection_metric: str = "combined_loss"
 
     def __post_init__(self) -> None:
         if self.epochs <= 0 or self.learning_rate <= 0 or self.patience <= 0:
@@ -33,6 +34,15 @@ class StageConfig:
             raise ValueError("regularization settings are invalid")
         if self.direction_loss_weight < 0 or self.actionable_move_pct <= 0:
             raise ValueError("multi-task loss settings are invalid")
+        if self.selection_metric not in {"combined_loss", "direction_loss"}:
+            raise ValueError("selection_metric must be combined_loss or direction_loss")
+
+
+@dataclass(frozen=True)
+class EpochLoss:
+    combined: float
+    regression: float
+    direction: float
 
 
 def direction_classes(targets: torch.Tensor, actionable_move_pct: float) -> torch.Tensor:
@@ -119,10 +129,12 @@ def _run_epoch(
     direction_class_weights: torch.Tensor,
     config: StageConfig,
     gradient_clip: float,
-) -> float:
+) -> EpochLoss:
     training = optimizer is not None
     model.train(training)
     total_loss = 0.0
+    total_regression_loss = 0.0
+    total_direction_loss = 0.0
     total_rows = 0
     for batch in loader:
         features, targets = batch[:2]
@@ -162,10 +174,16 @@ def _run_epoch(
                 optimizer.step()
         rows = len(features)
         total_loss += float(loss.detach()) * rows
+        total_regression_loss += float(regression_loss.detach()) * rows
+        total_direction_loss += float(classification_loss.detach()) * rows
         total_rows += rows
     if total_rows == 0:
         raise ValueError("training loader yielded no rows")
-    return total_loss / total_rows
+    return EpochLoss(
+        combined=total_loss / total_rows,
+        regression=total_regression_loss / total_rows,
+        direction=total_direction_loss / total_rows,
+    )
 
 
 def fit_stage(
@@ -191,7 +209,7 @@ def fit_stage(
     direction_class_weights = direction_class_weights.to(device)
     for epoch in range(1, config.epochs + 1):
         started = time.perf_counter()
-        train_loss = _run_epoch(
+        train_losses = _run_epoch(
             model,
             train_loader,
             device=device,
@@ -203,7 +221,7 @@ def fit_stage(
             gradient_clip=config.gradient_clip,
         )
         with torch.inference_mode():
-            validation_loss = _run_epoch(
+            validation_losses = _run_epoch(
                 model,
                 validation_loader,
                 device=device,
@@ -214,22 +232,35 @@ def fit_stage(
                 config=config,
                 gradient_clip=config.gradient_clip,
             )
-        if not math.isfinite(train_loss) or not math.isfinite(validation_loss):
+        loss_values = (*train_losses.__dict__.values(), *validation_losses.__dict__.values())
+        if not all(math.isfinite(value) for value in loss_values):
             raise RuntimeError("training produced a non-finite loss")
+        selection_loss = (
+            validation_losses.direction
+            if config.selection_metric == "direction_loss"
+            else validation_losses.combined
+        )
         row = {
             "epoch": float(epoch),
-            "train_loss": train_loss,
-            "validation_loss": validation_loss,
+            "train_loss": train_losses.combined,
+            "train_regression_loss": train_losses.regression,
+            "train_direction_loss": train_losses.direction,
+            "validation_loss": validation_losses.combined,
+            "validation_regression_loss": validation_losses.regression,
+            "validation_direction_loss": validation_losses.direction,
+            "selection_loss": selection_loss,
             "duration_seconds": time.perf_counter() - started,
         }
         history.append(row)
         print(
-            f"epoch={epoch} train={train_loss:.6f} validation={validation_loss:.6f} "
+            f"epoch={epoch} train={train_losses.combined:.6f} "
+            f"validation={validation_losses.combined:.6f} "
+            f"selection={selection_loss:.6f} ({config.selection_metric}) "
             f"duration={row['duration_seconds']:.1f}s",
             flush=True,
         )
-        if validation_loss < best_validation - 1e-7:
-            best_validation = validation_loss
+        if selection_loss < best_validation - 1e-7:
+            best_validation = selection_loss
             best_state = copy.deepcopy(model.state_dict())
             stale_epochs = 0
         else:

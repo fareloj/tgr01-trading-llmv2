@@ -394,6 +394,11 @@ def main() -> int:
                 learning_rate=args.global_learning_rate,
                 patience=max(1, min(2, args.global_epochs)),
                 direction_loss_weight=args.direction_loss_weight,
+                selection_metric=(
+                    "direction_loss"
+                    if args.direction_target_mode == "barrier"
+                    else "combined_loss"
+                ),
             ),
             target_scaler=target_scaler,
             direction_class_weights=global_direction_weights,
@@ -487,6 +492,11 @@ def main() -> int:
             learning_rate=args.local_learning_rate,
             patience=max(1, min(2, args.local_epochs)),
             direction_loss_weight=args.direction_loss_weight,
+            selection_metric=(
+                "direction_loss"
+                if args.direction_target_mode == "barrier"
+                else "combined_loss"
+            ),
         ),
         target_scaler=target_scaler,
         direction_class_weights=local_direction_weights,

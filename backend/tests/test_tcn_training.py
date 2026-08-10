@@ -16,11 +16,13 @@ from backend.ml.sequences import (
     chronological_ranges,
     continuous_end_indices,
     derive_continuous_segments,
+    expanding_walk_forward_ranges,
     observed_target_indices,
     split_temporal_bounds,
 )
 from backend.ml.tcn import CausalConv1d, QuantileTCN, TCNConfig, quantile_loss
 from backend.ml.training import (
+    StageConfig,
     apply_direction_temperatures,
     direction_classes,
     direction_loss,
@@ -29,6 +31,25 @@ from backend.ml.training import (
     fit_direction_temperatures,
     predict_quantiles,
 )
+
+
+def test_barrier_training_can_select_checkpoints_by_direction_loss():
+    config = StageConfig(
+        epochs=2,
+        learning_rate=1e-3,
+        selection_metric="direction_loss",
+    )
+
+    assert config.selection_metric == "direction_loss"
+
+
+def test_training_rejects_unknown_checkpoint_selection_metric():
+    with pytest.raises(ValueError, match="selection_metric"):
+        StageConfig(
+            epochs=2,
+            learning_rate=1e-3,
+            selection_metric="profit_on_test",
+        )
 
 
 def test_continuous_indices_reject_gaps_and_segment_boundaries():
@@ -140,6 +161,45 @@ def test_temporal_subranges_keep_calibration_after_purged_selection():
     assert first[0] == 600
     assert second == (720, 800)
     assert timestamps[first[1] - 1] + 60 * 60 < timestamps[second[0]]
+
+
+def test_expanding_walk_forward_folds_are_ordered_and_purged():
+    timestamps = np.arange(1_000, dtype=np.int64) * 60 + 1_800_000_000
+
+    folds = expanding_walk_forward_ranges(
+        timestamps,
+        minimum_train_rows=300,
+        selection_rows=100,
+        calibration_rows=100,
+        test_rows=100,
+        step_rows=100,
+        purge_minutes=60,
+    )
+
+    assert len(folds) == 5
+    assert folds[0].train == (0, 240)
+    assert folds[0].selection == (300, 340)
+    assert folds[0].calibration == (400, 440)
+    assert folds[0].test == (500, 600)
+    assert folds[1].train[1] > folds[0].train[1]
+    for fold in folds:
+        assert timestamps[fold.train[1] - 1] + 60 * 60 < timestamps[fold.selection[0]]
+        assert timestamps[fold.selection[1] - 1] + 60 * 60 < timestamps[fold.calibration[0]]
+        assert timestamps[fold.calibration[1] - 1] + 60 * 60 < timestamps[fold.test[0]]
+
+
+def test_walk_forward_rejects_a_purge_that_empties_a_partition():
+    timestamps = np.arange(100, dtype=np.int64) * 60 + 1_800_000_000
+
+    with pytest.raises(ValueError, match="empty walk-forward"):
+        expanding_walk_forward_ranges(
+            timestamps,
+            minimum_train_rows=40,
+            selection_rows=20,
+            calibration_rows=20,
+            test_rows=20,
+            purge_minutes=30,
+        )
 
 
 def test_scaler_is_unchanged_by_validation_outlier():
