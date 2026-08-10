@@ -120,6 +120,17 @@ Paper orders run inside one PostgreSQL transaction. The audit stores expected
 and effective price, fee, slippage, BRL/BTC deltas, average cost, realized PnL,
 equity before and after execution, the LLM evidence brief, and the risk verdict.
 
+Every live paper cycle also receives a UUID in the PostgreSQL `trading_runs`
+table. The lifecycle record covers successful cycles, preventive aborts and
+exceptions, recording the reached stage, duration, configured model/profile,
+validated LLM decision, Risk Manager verdict, compact market snapshot,
+execution audit and the related `trade_logs` row. Secrets, access tokens, full
+prompts and unvalidated raw model output are deliberately excluded.
+
+```powershell
+py -3.11 .\backend\tests\analyze_trading_runs.py --limit 30
+```
+
 ### Authenticated exchange dry-run
 
 The optional Mercado Bitcoin validator authenticates with OAuth2 and reads the

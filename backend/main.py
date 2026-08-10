@@ -14,6 +14,7 @@ from backend.core.audit import serialize_payload_snapshot
 from backend.core.database import get_db_path, init_db, print_db_diagnostics
 from backend.core import database, repository
 from backend.core.runtime_safety import assess_worker_heartbeats
+from backend.core.trading_run_audit import TradingRunAudit
 from backend.execution.paper_simulator import PaperExecutionConfig, empty_execution_audit, execute_paper_order
 from backend.features.payload_builder import build_agent_payload
 from backend.risk.risk_manager import RiskManager
@@ -41,7 +42,7 @@ def audit_hold_without_llm(payload: dict, reason: str):
         "reasoning": reason,
         "payload_snapshot_json": serialize_payload_snapshot(payload),
     }
-    repository.add_trade_log_autocommit(data)
+    return repository.add_trade_log_autocommit(data)
 
 
 def is_llm_technical_failure(llm_decision) -> bool:
@@ -60,11 +61,23 @@ def run_trading_cycle():
     init_db()
     print_db_diagnostics()
 
+    run_audit = TradingRunAudit.start()
+    print(f"[RUN] id={run_audit.run_id}")
+    with run_audit:
+        return _run_trading_cycle(run_audit)
+
+
+def _run_trading_cycle(run_audit: TradingRunAudit):
+    run_audit.mark_stage("worker_preflight")
+
     if not _workers_are_healthy():
+        run_audit.abort("Workers obrigatorios ausentes, stale ou invalidos.")
         return False
 
+    run_audit.mark_stage("payload")
     print("[1/4] Montando Payload do Mercado (TA + Noticias)...")
     payload = build_agent_payload()
+    run_audit.capture_payload(payload)
 
     if payload.get("status") == "ERROR":
         print(f"[!] Ciclo abortado: {payload.get('message', 'Dados insuficientes no banco.')}")
@@ -74,6 +87,7 @@ def run_trading_cycle():
             f"{payload.get('found_klines', 'unknown')}/{payload.get('required_klines', 'unknown')} "
             f"para {payload.get('asset', 'unknown')} {payload.get('timeframe', 'unknown')}"
         )
+        run_audit.abort(payload.get("message", "Dados insuficientes no banco."), payload=payload)
         return False
 
     current_price = payload["technical_context"]["current_price"]
@@ -95,7 +109,8 @@ def run_trading_cycle():
         )
         print(f"[!] {reason}")
         print("      -> LLM nao consultado. HOLD tecnico auditado.")
-        audit_hold_without_llm(payload, reason)
+        trade_log_id = audit_hold_without_llm(payload, reason)
+        run_audit.abort(reason, trade_log_id=trade_log_id, payload=payload)
         print("=" * 60 + "\n")
         return False
 
@@ -103,7 +118,8 @@ def run_trading_cycle():
         reason = "Pre-LLM abort: nenhuma chave LLM configurada."
         print(f"[!] {reason}")
         print("      -> HOLD tecnico auditado; mocks nao participam do runtime.")
-        audit_hold_without_llm(payload, reason)
+        trade_log_id = audit_hold_without_llm(payload, reason)
+        run_audit.abort(reason, trade_log_id=trade_log_id, payload=payload)
         print("=" * 60 + "\n")
         return False
 
@@ -113,10 +129,12 @@ def run_trading_cycle():
     except (RuntimeError, ValueError) as error:
         reason = f"Pre-LLM abort: estado de capital paper invalido ({error})."
         print(f"[!] {reason}")
-        audit_hold_without_llm(payload, reason)
+        trade_log_id = audit_hold_without_llm(payload, reason)
+        run_audit.abort(reason, trade_log_id=trade_log_id, payload=payload)
         print("=" * 60 + "\n")
         return False
 
+    run_audit.mark_stage("llm")
     print("[2/4] Consultando Decision Agent (LLM)...")
     agent = DecisionAgent()
     if os.getenv("LLM_TOOLS_ENABLED", "false").strip().lower() in {"1", "true", "yes"}:
@@ -136,6 +154,7 @@ def run_trading_cycle():
             print(f"         tool={result.tool} status={result.status} latency={result.latency_ms:.1f}ms")
     else:
         llm_decision = agent.evaluate_market(payload)
+    run_audit.capture_llm(llm_decision)
 
     print(f"      -> IA Sugeriu: {llm_decision.action} | Conviccao: {llm_decision.conviction}%")
     print(f"      -> Justificativa: {llm_decision.reasoning}")
@@ -144,6 +163,7 @@ def run_trading_cycle():
         for line in llm_decision.decision_brief.splitlines()[:3]:
             print(f"         {line}")
 
+    run_audit.mark_stage("risk")
     print("[3/4] Avaliando Risco Matematico (A Muralha)...")
     current_exposure = payload["portfolio_context"]["current_exposure_percentage"]
 
@@ -160,10 +180,12 @@ def run_trading_cycle():
             payload=payload,
             current_exposure=current_exposure,
         )
+    run_audit.capture_risk(final_order)
 
     print(f"      -> VEREDITO FINAL: {final_order['action']}")
     print(f"      -> MOTIVO: {final_order['reason']}")
 
+    run_audit.mark_stage("execution")
     print("[4/4] Execucao e Auditoria.")
     reliability_action = None if is_llm_technical_failure(llm_decision) else llm_decision.action
     sys_rel = rm.calculate_system_reliability(payload, action=reliability_action)
@@ -171,10 +193,14 @@ def run_trading_cycle():
     try:
         with database.engine.begin() as conn:
             execution_audit = _execute_if_approved(conn, final_order, current_price, payload)
-            _insert_trade_log(conn, llm_decision, final_order, sys_rel, current_price, payload, execution_audit)
+            trade_log_id = _insert_trade_log(
+                conn, llm_decision, final_order, sys_rel, current_price, payload, execution_audit
+            )
     except Exception as e:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [Error Critico] Transacao falhou e foi desfeita: {type(e).__name__}: {e}")
         raise
+
+    run_audit.complete(trade_log_id=trade_log_id, execution_audit=execution_audit)
 
     if final_order["action"] == "HOLD":
         print("      -> Nenhuma ordem enviada para a Exchange.")
@@ -235,7 +261,7 @@ def _execute_if_approved(connection, final_order: dict, current_price: float, pa
     return execution_audit
 
 
-def _insert_trade_log(connection, llm_decision, final_order: dict, sys_rel: float, current_price: float, payload: dict, execution_audit: dict) -> None:
+def _insert_trade_log(connection, llm_decision, final_order: dict, sys_rel: float, current_price: float, payload: dict, execution_audit: dict) -> int:
     data = {
         "timestamp": int(time.time()),
         "llm_action": llm_decision.action,
@@ -263,7 +289,7 @@ def _insert_trade_log(connection, llm_decision, final_order: dict, sys_rel: floa
         "realized_pnl_brl": execution_audit["realized_pnl_brl"],
         "position_avg_cost_brl": execution_audit["position_avg_cost_brl"],
     }
-    repository.add_trade_log(data, connection=connection)
+    return repository.add_trade_log(data, connection=connection)
 
 
 if __name__ == "__main__":

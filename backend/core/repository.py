@@ -8,7 +8,7 @@ from backend.core.db_models import (
     metadata, klines, news, trade_logs, equity_snapshots, virtual_portfolio,
     paper_position_state, paper_position_reconciliations, system_health,
     rag_documents, rag_chunks, rag_retrieval_logs, analysis_tool_calls,
-    market_events
+    market_events, trading_runs
 )
 
 class EngineProxy:
@@ -29,6 +29,35 @@ def init_db_schema():
     """Initializes the database schema."""
     from backend.core.database import init_db
     init_db()
+
+
+def create_trading_run(values: Dict[str, Any], connection=None) -> str:
+    """Create an end-to-end cycle audit record."""
+    stmt = insert(trading_runs).values(**values)
+    _execute_query(stmt, connection=connection)
+    return str(values["run_id"])
+
+
+def update_trading_run(run_id: str, values: Dict[str, Any], connection=None) -> None:
+    """Update one cycle audit without mutating its identity."""
+    if not values:
+        return
+    stmt = update(trading_runs).where(trading_runs.c.run_id == run_id).values(**values)
+    _execute_query(stmt, connection=connection)
+
+
+def get_trading_run(run_id: str, connection=None) -> Optional[Dict[str, Any]]:
+    stmt = select(trading_runs).where(trading_runs.c.run_id == run_id)
+    row = _execute_query(stmt, connection=connection).first()
+    return dict(row._mapping) if row else None
+
+
+def get_trading_runs(limit: int = 100, connection=None) -> List[Dict[str, Any]]:
+    stmt = select(trading_runs).order_by(
+        trading_runs.c.started_at.desc(), trading_runs.c.run_id.desc()
+    ).limit(limit)
+    rows = _execute_query(stmt, connection=connection)
+    return [dict(row._mapping) for row in rows]
 
 def upsert_kline(kline_dict: Dict[str, Any], connection=None):
     """Upserts a single kline row."""

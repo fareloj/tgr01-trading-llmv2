@@ -213,3 +213,34 @@ market_events = Table(
     Column('dedupe_key', String, nullable=False, unique=True),
 )
 Index('idx_market_events_asset_timestamp', market_events.c.asset, market_events.c.event_timestamp)
+
+# 14. End-to-end Trading Run Audit
+trading_runs = Table(
+    'trading_runs',
+    metadata,
+    Column('run_id', String, primary_key=True),
+    Column('started_at', Integer, nullable=False),
+    Column('completed_at', Integer, nullable=True),
+    Column('duration_ms', Float, nullable=True),
+    Column('status', String, nullable=False),
+    Column('stage', String, nullable=False),
+    Column('mode', String, nullable=False),
+    Column('model', String, nullable=True),
+    Column('provider_base_url', String, nullable=True),
+    Column('prompt_profile', String, nullable=True),
+    Column('llm_called', Boolean, nullable=False, server_default='false'),
+    Column('llm_action', String, nullable=True),
+    Column('llm_conviction', Float, nullable=True),
+    Column('llm_reasoning', String, nullable=True),
+    Column('llm_decision_brief', String, nullable=True),
+    Column('risk_action', String, nullable=True),
+    Column('risk_reason', String, nullable=True),
+    Column('executed_size', Float, nullable=True),
+    Column('payload_snapshot_json', String, nullable=True),
+    Column('execution_audit_json', String, nullable=True),
+    Column('trade_log_id', Integer, nullable=True),
+    Column('error_type', String, nullable=True),
+    Column('error_message', String, nullable=True),
+)
+Index('idx_trading_runs_started_at', trading_runs.c.started_at)
+Index('idx_trading_runs_status_stage', trading_runs.c.status, trading_runs.c.stage)
