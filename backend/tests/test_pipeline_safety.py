@@ -107,6 +107,9 @@ def test_payload_allows_30_klines_and_keeps_schema():
     assert payload["news_risk"]["has_negative_red_flag"] is False
     assert payload["data_health"]["is_market_data_stale"] is False
     assert payload["data_health"]["is_news_stale"] is False
+    assert payload["decision_memory"]["status"] == "OK"
+    assert payload["decision_memory"]["episodes"] == []
+    assert payload["decision_memory"]["rules"]["raw_model_text_excluded"] is True
     assert "current_exposure_percentage" in payload["portfolio_context"]
 
 
@@ -577,6 +580,8 @@ def test_payload_snapshot_keeps_auditable_fields():
     payload = _compatible_payload()
     payload["technical_context"]["rsi"] = {"value": 31.5, "status": "OVERSOLD"}
     payload["technical_context"]["macd"] = {"histogram": -20.2, "status": "BEARISH_EXPANDING"}
+    payload["technical_context"]["ema_crossover"] = {"status": "BEARISH"}
+    payload["decision_memory"] = {"episodes": [{"raw": "must not be persisted recursively"}]}
     payload["data_health"]["kline_age_seconds"] = 50
     payload["data_health"]["news_age_seconds"] = 600
     payload["news_risk"] = {
@@ -591,8 +596,10 @@ def test_payload_snapshot_keeps_auditable_fields():
     assert snapshot["schema_version"] == 1
     assert snapshot["technical"]["rsi_status"] == "OVERSOLD"
     assert snapshot["technical"]["macd_status"] == "BEARISH_EXPANDING"
+    assert snapshot["technical"]["ema_status"] == "BEARISH"
     assert snapshot["data_health"]["kline_age_seconds"] == 50
     assert snapshot["news_risk"]["matched_terms"] == ["hack"]
+    assert "decision_memory" not in snapshot
 
 
 def test_init_db_migrates_existing_trade_logs_snapshot_column():

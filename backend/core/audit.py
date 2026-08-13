@@ -36,6 +36,7 @@ def build_payload_snapshot(payload: dict) -> dict:
             "rsi_status": technical.get("rsi", {}).get("status"),
             "macd_histogram": technical.get("macd", {}).get("histogram"),
             "macd_status": technical.get("macd", {}).get("status"),
+            "ema_status": technical.get("ema_crossover", {}).get("status"),
             "volatility_atr": technical.get("volatility_atr"),
         },
         "data_health": {

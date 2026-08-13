@@ -230,7 +230,13 @@ def add_trade_log_autocommit(trade_log_dict: Dict[str, Any]) -> int:
         return res.inserted_primary_key[0]
     return 0
 
-def get_trade_logs(action: Optional[str] = None, limit: Optional[int] = None, since_timestamp: Optional[int] = None, connection=None) -> List[Dict[str, Any]]:
+def get_trade_logs(
+    action: Optional[str] = None,
+    limit: Optional[int] = None,
+    since_timestamp: Optional[int] = None,
+    until_timestamp: Optional[int] = None,
+    connection=None,
+) -> List[Dict[str, Any]]:
     """Gets trade logs sorted chronologically."""
     stmt = select(trade_logs)
     filters = []
@@ -238,6 +244,8 @@ def get_trade_logs(action: Optional[str] = None, limit: Optional[int] = None, si
         filters.append(trade_logs.c.action == action)
     if since_timestamp is not None:
         filters.append(trade_logs.c.timestamp >= since_timestamp)
+    if until_timestamp is not None:
+        filters.append(trade_logs.c.timestamp <= until_timestamp)
     if filters:
         stmt = stmt.where(and_(*filters))
     stmt = stmt.order_by(trade_logs.c.timestamp.asc())

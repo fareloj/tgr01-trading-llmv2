@@ -28,10 +28,10 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
 | RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
-| Latest backend validation | 312 Python tests passing |
+| Latest backend validation | 328 Python tests passing |
 | Latest desktop validation | 6 Node tests, Vite build, and Electron smoke passing |
 
-These test counts describe the state recorded on 2026-08-10. They validate
+These test counts describe the state recorded on 2026-08-13. They validate
 contracts, failure behavior, accounting, and interfaces. They do not measure
 future returns.
 
@@ -126,6 +126,14 @@ exceptions, recording the reached stage, duration, configured model/profile,
 validated LLM decision, Risk Manager verdict, compact market snapshot,
 execution audit and the related `trade_logs` row. Secrets, access tokens, full
 prompts and unvalidated raw model output are deliberately excluded.
+
+The active Decision Agent also receives a bounded episodic memory of at most
+eight audited decisions from the preceding two hours. Each episode contains
+only the proposed action, conviction, deterministic Risk Manager verdict and a
+small whitelist of market-scenario fields and categorical justification tags.
+Prior free-form reasoning, decision briefs, prompts, headlines and nested
+snapshots are never reinjected. This memory can expose recent inconsistency but
+is explicitly not market evidence and cannot approve or size an order.
 
 ```powershell
 py -3.11 .\backend\tests\analyze_trading_runs.py --limit 30

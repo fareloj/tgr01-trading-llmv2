@@ -11,6 +11,7 @@ from backend.core.database import get_db_path
 from backend.core.market_policy import MARKET_DATA_MAX_AGE_SECONDS
 from backend.core.runtime_safety import MAX_FUTURE_MARKET_DATA_SECONDS
 from backend.features.indicators import get_historical_klines, calculate_technical_status
+from backend.features.decision_memory import build_decision_memory
 
 NEWS_STALE_SECONDS = 6 * 3600
 FUTURE_NEWS_TOLERANCE_SECONDS = 300
@@ -189,6 +190,7 @@ def build_agent_payload(asset: str = "BTC/BRL", timeframe: str = "1m", as_of_tim
         "news_context": recent_news,
         "data_health": data_health,
         "news_risk": news_risk,
+        "decision_memory": build_decision_memory(as_of_timestamp=as_of_timestamp),
         "portfolio_context": {
             "current_exposure_percentage": round(current_exposure, 2), 
             "is_in_drawdown": total_equity < 10000.0,
