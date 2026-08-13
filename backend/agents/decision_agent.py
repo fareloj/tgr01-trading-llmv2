@@ -276,6 +276,14 @@ class DecisionAgent:
         )
 
     def _request_limits(self, purpose: str) -> dict:
+        if self.model.startswith("nemotron-3-ultra"):
+            env_name = (
+                "NEMOTRON_PLANNER_MAX_COMPLETION_TOKENS"
+                if purpose == "planner"
+                else "NEMOTRON_MAX_COMPLETION_TOKENS"
+            )
+            default_budget = "3500" if purpose == "planner" else "5000"
+            return {"max_tokens": int(os.getenv(env_name, default_budget))}
         if self.model == "qwen/qwen3.6-27b":
             return {
                 "max_completion_tokens": 600 if purpose == "decision" else 450,

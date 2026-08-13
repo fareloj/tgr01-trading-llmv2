@@ -24,7 +24,7 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Execution | Paper trading only |
 | Real exchange orders | Not implemented; authenticated BUY/SELL validation is dry-run only |
 | Active database | PostgreSQL 16 |
-| Experimental decision model | `gpt-oss:120b-cloud` through the local Ollama OpenAI-compatible endpoint |
+| Experimental decision model | `nemotron-3-ultra:cloud` through the local Ollama OpenAI-compatible endpoint |
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
 | RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
@@ -394,13 +394,13 @@ Set a strong local PostgreSQL password and keep `DATABASE_URL` consistent.
 Never commit either `.env` file.
 
 The example `backend/.env.example` selects Ollama's local OpenAI-compatible
-endpoint and `gpt-oss:120b-cloud`. `LLM_*` variables are canonical. Existing
+endpoint and `nemotron-3-ultra:cloud`. `LLM_*` variables are canonical. Existing
 `GROQ_*` variables remain supported as a legacy fallback for comparisons.
 
 An experimental multi-agent configuration is also documented, but remains
 disabled and shadow-only by default. It assigns `gpt-oss:20b-cloud` to news
 analysis and interpretation of the deterministic eight-hour technical context,
-and `gpt-oss:120b-cloud` to the final decision. Qwen Cloud was unavailable on
+and the configured Decision model to the final proposal. Qwen Cloud was unavailable on
 the tested account and accessible Nemotron variants did not reliably satisfy
 the full technical JSON contract. This is an evaluation configuration, not
 evidence that multiple agents improve trading results. Outputs retain source

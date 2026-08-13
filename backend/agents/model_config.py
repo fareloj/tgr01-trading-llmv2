@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 
 DEFAULT_LLM_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_DECISION_MODEL = "gpt-oss:120b-cloud"
+DEFAULT_DECISION_MODEL = "nemotron-3-ultra:cloud"
 DEFAULT_NEWS_MODEL = "gpt-oss:20b-cloud"
 DEFAULT_TECHNICAL_MODEL = "gpt-oss:20b-cloud"
 

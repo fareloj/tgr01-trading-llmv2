@@ -42,7 +42,7 @@ def test_default_role_assignments_match_experimental_cloud_models():
 
     assert config.news_model == "gpt-oss:20b-cloud"
     assert config.technical_model == "gpt-oss:20b-cloud"
-    assert config.decision_model == "gpt-oss:120b-cloud"
+    assert config.decision_model == "nemotron-3-ultra:cloud"
 
 
 def test_role_models_and_endpoint_can_be_overridden(monkeypatch):

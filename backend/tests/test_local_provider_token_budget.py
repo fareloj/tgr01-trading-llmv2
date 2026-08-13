@@ -17,7 +17,6 @@ from backend.tests.compare_prompt_profiles import PromptProfileRunner
 
 
 LOCAL_NON_GPT_OSS_MODEL_TAGS = [
-    "nemotron-3-ultra:cloud",
     "nemotron-3-super:cloud",
     "prism-ml/bonsai-27b",
     "qwen/qwen3.5-9b",
@@ -37,6 +36,20 @@ def hosted_env(monkeypatch):
 
 
 class TestDecisionAgentLocalBudget:
+    def test_nemotron_ultra_gets_contract_safe_budget(self, local_env, monkeypatch):
+        monkeypatch.setenv("LLM_MODEL", "nemotron-3-ultra:cloud")
+        agent = DecisionAgent()
+        assert agent._request_limits("decision") == {"max_tokens": 5000}
+        assert agent._request_limits("planner") == {"max_tokens": 3500}
+
+    def test_nemotron_ultra_budget_can_be_overridden(self, local_env, monkeypatch):
+        monkeypatch.setenv("LLM_MODEL", "nemotron-3-ultra:cloud")
+        monkeypatch.setenv("NEMOTRON_MAX_COMPLETION_TOKENS", "6000")
+        monkeypatch.setenv("NEMOTRON_PLANNER_MAX_COMPLETION_TOKENS", "4000")
+        agent = DecisionAgent()
+        assert agent._request_limits("decision") == {"max_tokens": 6000}
+        assert agent._request_limits("planner") == {"max_tokens": 4000}
+
     @pytest.mark.parametrize("model", LOCAL_NON_GPT_OSS_MODEL_TAGS)
     def test_local_non_gpt_oss_models_get_the_widened_budget(self, local_env, monkeypatch, model):
         monkeypatch.setenv("LLM_MODEL", model)
@@ -60,6 +73,17 @@ class TestDecisionAgentLocalBudget:
 
 
 class TestPromptProfileRunnerLocalBudget:
+    def test_nemotron_ultra_gets_contract_safe_budget(self, local_env, monkeypatch):
+        monkeypatch.setenv("LLM_MODEL", "nemotron-3-ultra:cloud")
+        runner = PromptProfileRunner()
+        assert runner._request_limits() == {"max_tokens": 5000}
+
+    def test_nemotron_ultra_campaign_budget_can_be_overridden(self, local_env, monkeypatch):
+        monkeypatch.setenv("LLM_MODEL", "nemotron-3-ultra:cloud")
+        monkeypatch.setenv("NEMOTRON_MAX_COMPLETION_TOKENS", "6000")
+        runner = PromptProfileRunner()
+        assert runner._request_limits() == {"max_tokens": 6000}
+
     @pytest.mark.parametrize("model", LOCAL_NON_GPT_OSS_MODEL_TAGS)
     def test_local_non_gpt_oss_models_get_the_widened_budget(self, local_env, monkeypatch, model):
         monkeypatch.setenv("LLM_MODEL", model)

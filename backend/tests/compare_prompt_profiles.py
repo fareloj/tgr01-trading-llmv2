@@ -194,6 +194,12 @@ class PromptProfileRunner:
         return True
 
     def _request_limits(self) -> dict:
+        if self.model.startswith("nemotron-3-ultra"):
+            return {
+                "max_tokens": int(
+                    os.getenv("NEMOTRON_MAX_COMPLETION_TOKENS", "5000")
+                )
+            }
         # gpt-oss is a heavy chain-of-thought reasoner: without reasoning_effort=low and a
         # larger completion budget it reliably spends its whole token budget on internal
         # reasoning and returns empty/truncated content. Match both naming conventions --
