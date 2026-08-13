@@ -260,6 +260,26 @@ def get_trade_log_by_id(log_id: int, connection=None) -> Optional[Dict[str, Any]
     res = _execute_query(stmt, connection=connection).first()
     return dict(res._mapping) if res else None
 
+
+def get_recent_trade_logs_window(
+    *, since_timestamp: int, until_timestamp: int, limit: int, connection=None
+) -> List[Dict[str, Any]]:
+    """Return the newest bounded audit rows in chronological order."""
+    bounded_limit = min(100, max(1, int(limit)))
+    stmt = (
+        select(trade_logs)
+        .where(
+            and_(
+                trade_logs.c.timestamp >= since_timestamp,
+                trade_logs.c.timestamp <= until_timestamp,
+            )
+        )
+        .order_by(desc(trade_logs.c.timestamp), desc(trade_logs.c.id))
+        .limit(bounded_limit)
+    )
+    rows = [dict(row._mapping) for row in _execute_query(stmt, connection=connection)]
+    return list(reversed(rows))
+
 def get_trade_log_ids(since_id: Optional[int] = None, limit: int = 100, connection=None) -> List[int]:
     """Retrieves IDs of logs having a payload snapshot, ordered by ID desc."""
     stmt = select(trade_logs.c.id).where(trade_logs.c.payload_snapshot_json.isnot(None))

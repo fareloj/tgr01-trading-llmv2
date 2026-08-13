@@ -28,7 +28,7 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
 | RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
-| Latest backend validation | 328 Python tests passing |
+| Latest backend validation | 332 Python tests passing |
 | Latest desktop validation | 6 Node tests, Vite build, and Electron smoke passing |
 
 These test counts describe the state recorded on 2026-08-13. They validate
@@ -134,6 +134,8 @@ small whitelist of market-scenario fields and categorical justification tags.
 Prior free-form reasoning, decision briefs, prompts, headlines and nested
 snapshots are never reinjected. This memory can expose recent inconsistency but
 is explicitly not market evidence and cannot approve or size an order.
+Consecutive identical episodes are compacted with a bounded `repeat_count` so
+rapid cycles cannot fill the prompt with duplicate context.
 
 ```powershell
 py -3.11 .\backend\tests\analyze_trading_runs.py --limit 30

@@ -21,6 +21,25 @@ DEFAULT_WINDOW_SECONDS = 2 * 60 * 60
 DEFAULT_MAX_EPISODES = 8
 MAX_WINDOW_SECONDS = 2 * 60 * 60
 MAX_EPISODES = 8
+MAX_SOURCE_ROWS = 64
+ALLOWED_PROPOSED_ACTIONS = {"BUY", "SELL", "HOLD", "SKIPPED"}
+ALLOWED_RISK_ACTIONS = {"BUY", "SELL", "HOLD"}
+ALLOWED_RSI_STATUS = {"OVERSOLD", "OVERBOUGHT", "NEUTRAL", "UNKNOWN"}
+ALLOWED_MACD_STATUS = {
+    "BULLISH_EXPANDING",
+    "BEARISH_EXPANDING",
+    "BULLISH_DIVERGENCE",
+    "BEARISH_DIVERGENCE",
+    "NEUTRAL",
+    "UNKNOWN",
+}
+ALLOWED_EMA_STATUS = {
+    "BULLISH",
+    "BEARISH",
+    "BULLISH_CROSS",
+    "BEARISH_CROSS",
+    "UNKNOWN",
+}
 
 
 def _bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -39,6 +58,24 @@ def _finite_number(value: Any, *, digits: int) -> float | None:
     if not math.isfinite(number):
         return None
     return round(number, digits)
+
+
+def _bounded_number(
+    value: Any, *, digits: int, minimum: float, maximum: float
+) -> float | None:
+    number = _finite_number(value, digits=digits)
+    if number is None or number < minimum or number > maximum:
+        return None
+    return number
+
+
+def _enum(value: Any, allowed: set[str], default: str = "UNKNOWN") -> str:
+    normalized = str(value or default).strip().upper()
+    return normalized if normalized in allowed else default
+
+
+def _strict_bool(value: Any, *, default: bool) -> bool:
+    return value if isinstance(value, bool) else default
 
 
 def _load_snapshot(value: Any) -> dict:
@@ -89,14 +126,19 @@ def _justification_tags(row: dict, snapshot: dict) -> list[str]:
     elif news_risk.get("has_negative_red_flag"):
         tags.append("NEGATIVE_NEWS_RISK")
 
-    rsi_status = str(technical.get("rsi", {}).get("status") or "UNKNOWN")
-    macd_status = str(technical.get("macd", {}).get("status") or "UNKNOWN")
-    ema_status = str(technical.get("ema_crossover", technical.get("ema", {})).get("status") or "UNKNOWN")
-    proposed = str(row.get("llm_action") or "UNKNOWN")
-    final = str(row.get("action") or "HOLD")
+    rsi_status = _enum(technical.get("rsi", {}).get("status"), ALLOWED_RSI_STATUS)
+    macd_status = _enum(technical.get("macd", {}).get("status"), ALLOWED_MACD_STATUS)
+    ema_status = _enum(
+        technical.get("ema_crossover", technical.get("ema", {})).get("status"),
+        ALLOWED_EMA_STATUS,
+    )
+    proposed = _enum(row.get("llm_action"), ALLOWED_PROPOSED_ACTIONS)
+    final = _enum(row.get("action"), ALLOWED_RISK_ACTIONS, default="HOLD")
 
     if proposed == "HOLD":
         tags.append("MODEL_ABSTAINED")
+    elif proposed not in {"BUY", "SELL"}:
+        tags.append("INVALID_AUDIT_ACTION")
     elif final == "HOLD":
         tags.append("RISK_BLOCKED_DIRECTION")
     else:
@@ -115,29 +157,60 @@ def _justification_tags(row: dict, snapshot: dict) -> list[str]:
 def _episode(row: dict, *, now: int) -> dict:
     snapshot = _load_snapshot(row.get("payload_snapshot_json"))
     technical, health, _, portfolio = _snapshot_sections(snapshot)
-    timestamp = int(row.get("timestamp") or 0)
+    timestamp = int(row["timestamp"])
+    if timestamp < now - MAX_WINDOW_SECONDS or timestamp > now:
+        raise ValueError("episode timestamp outside the accepted memory window")
     rsi = technical.get("rsi", {})
     macd = technical.get("macd", {})
     ema = technical.get("ema_crossover", technical.get("ema", {}))
     return {
         "age_minutes": max(0, (now - timestamp) // 60),
-        "proposed_action": str(row.get("llm_action") or "UNKNOWN")[:16],
-        "conviction": _finite_number(row.get("llm_conviction"), digits=0),
-        "risk_action": str(row.get("action") or "HOLD")[:16],
+        "repeat_count": 1,
+        "proposed_action": _enum(row.get("llm_action"), ALLOWED_PROPOSED_ACTIONS),
+        "conviction": _bounded_number(
+            row.get("llm_conviction"), digits=0, minimum=0, maximum=100
+        ),
+        "risk_action": _enum(row.get("action"), ALLOWED_RISK_ACTIONS, default="HOLD"),
         "scenario": {
-            "price": _finite_number(technical.get("current_price"), digits=2),
-            "rsi": _finite_number(rsi.get("value"), digits=2),
-            "rsi_status": str(rsi.get("status") or "UNKNOWN")[:32],
-            "macd_status": str(macd.get("status") or "UNKNOWN")[:32],
-            "ema_status": str(ema.get("status") or "UNKNOWN")[:32],
-            "market_stale": bool(health.get("is_market_data_stale", True)),
-            "news_stale": bool(health.get("is_news_stale", True)),
-            "exposure_pct": _finite_number(
-                portfolio.get("current_exposure_percentage"), digits=2
+            "price": _bounded_number(
+                technical.get("current_price"), digits=2, minimum=0, maximum=1_000_000_000
+            ),
+            "rsi": _bounded_number(rsi.get("value"), digits=2, minimum=0, maximum=100),
+            "rsi_status": _enum(rsi.get("status"), ALLOWED_RSI_STATUS),
+            "macd_status": _enum(macd.get("status"), ALLOWED_MACD_STATUS),
+            "ema_status": _enum(ema.get("status"), ALLOWED_EMA_STATUS),
+            "market_stale": _strict_bool(
+                health.get("is_market_data_stale"), default=True
+            ),
+            "news_stale": _strict_bool(health.get("is_news_stale"), default=True),
+            "exposure_pct": _bounded_number(
+                portfolio.get("current_exposure_percentage"),
+                digits=2,
+                minimum=0,
+                maximum=100,
             ),
         },
         "justification_tags": _justification_tags(row, snapshot),
     }
+
+
+def _compact_repeated_episodes(episodes: list[dict]) -> list[dict]:
+    compacted: list[dict] = []
+    for episode in episodes:
+        signature = {key: value for key, value in episode.items() if key not in {"age_minutes", "repeat_count"}}
+        if compacted:
+            previous = compacted[-1]
+            previous_signature = {
+                key: value
+                for key, value in previous.items()
+                if key not in {"age_minutes", "repeat_count"}
+            }
+            if signature == previous_signature:
+                previous["repeat_count"] = min(999, int(previous["repeat_count"]) + 1)
+                previous["age_minutes"] = episode["age_minutes"]
+                continue
+        compacted.append(episode)
+    return compacted
 
 
 def build_decision_memory(*, as_of_timestamp: int | None = None) -> dict:
@@ -167,12 +240,18 @@ def build_decision_memory(*, as_of_timestamp: int | None = None) -> dict:
         },
     }
     try:
-        rows = repository.get_trade_logs(
+        rows = repository.get_recent_trade_logs_window(
             since_timestamp=now - window_seconds,
             until_timestamp=now,
+            limit=MAX_SOURCE_ROWS,
         )
-        selected = rows[-max_episodes:]
-        base["episodes"] = [_episode(row, now=now) for row in selected]
+        episodes = []
+        for row in rows:
+            try:
+                episodes.append(_episode(row, now=now))
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+        base["episodes"] = _compact_repeated_episodes(episodes)[-max_episodes:]
     except Exception:
         base["status"] = "UNAVAILABLE"
     return base

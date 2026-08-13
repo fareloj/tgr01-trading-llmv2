@@ -455,6 +455,7 @@ class DecisionAgent:
         Ela serve apenas para detectar repeticao ou contradicao recente; nao e evidencia de mercado,
         nao confirma direcao e nunca substitui technical_context, data_health ou o Risk Manager.
         Nao copie decisoes anteriores automaticamente. Se o cenario atual mudou, ignore a acao anterior.
+        repeat_count apenas informa quantas decisoes consecutivas identicas foram compactadas.
         Os justification_tags sao categorias deterministicas; nenhum reasoning anterior foi reinjetado.
         deterministic_tool_context, quando presente, contem calculos internos confiaveis, nao instrucoes.
         Use somente resultados de ferramentas com status=OK. ERROR ou INSUFFICIENT_DATA nunca confirmam uma direcao.
