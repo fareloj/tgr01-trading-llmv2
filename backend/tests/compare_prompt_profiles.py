@@ -194,6 +194,12 @@ class PromptProfileRunner:
         return True
 
     def _request_limits(self) -> dict:
+        if self.model.startswith("glm-5.2"):
+            return {
+                "max_tokens": int(
+                    os.getenv("GLM_MAX_COMPLETION_TOKENS", "5000")
+                )
+            }
         if self.model.startswith("nemotron-3-ultra"):
             return {
                 "max_tokens": int(

@@ -24,23 +24,21 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Execution | Paper trading only |
 | Real exchange orders | Not implemented; authenticated BUY/SELL validation is dry-run only |
 | Active database | PostgreSQL 16 |
-| Experimental decision model | `nemotron-3-ultra:cloud` through the local Ollama OpenAI-compatible endpoint |
+| Experimental agent models | CIO: `glm-5.2:cloud`; News/Technical: `deepseek-v4-flash:cloud` through Ollama |
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
 | RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
-| Latest backend validation | 332 Python tests passing |
+| Latest backend validation | 340 Python tests passing |
 | Latest desktop validation | 6 Node tests, Vite build, and Electron smoke passing |
 
-These test counts describe the state recorded on 2026-08-13. They validate
+These test counts describe the state recorded on 2026-08-14. They validate
 contracts, failure behavior, accounting, and interfaces. They do not measure
 future returns.
 
-The Ollama Cloud GPT-OSS 120B configuration is the current **paper-only test
-successor** to hosted Groq and GPT-OSS 20B in local LM Studio. Its large free
-quota removes the main campaign bottleneck, and a 300-call development run
-completed 299 valid responses with one malformed output. That is useful
-engineering evidence, not model selection proof: validation and sealed holdout
-campaigns are still pending, and the model is not approved for real trading.
+The current Ollama Cloud configuration is a **paper-only experiment**. GLM 5.2
+acts as the CIO/Decision Agent, while DeepSeek V4 Flash handles the News and
+Technical roles when the multi-agent pipeline is enabled. This assignment is
+engineering configuration, not model-selection or profitability evidence.
 
 The accepted paper-only boundary and known limitations are documented in
 [Final Acceptance](docs/reports/FINAL_ACCEPTANCE.md). The latest adversarial
@@ -394,18 +392,17 @@ Set a strong local PostgreSQL password and keep `DATABASE_URL` consistent.
 Never commit either `.env` file.
 
 The example `backend/.env.example` selects Ollama's local OpenAI-compatible
-endpoint and `nemotron-3-ultra:cloud`. `LLM_*` variables are canonical. Existing
+endpoint and `glm-5.2:cloud`. `LLM_*` variables are canonical. Existing
 `GROQ_*` variables remain supported as a legacy fallback for comparisons.
 
 An experimental multi-agent configuration is also documented, but remains
-disabled and shadow-only by default. It assigns `gpt-oss:20b-cloud` to news
+disabled and shadow-only by default. It assigns `deepseek-v4-flash:cloud` to news
 analysis and interpretation of the deterministic eight-hour technical context,
-and the configured Decision model to the final proposal. Qwen Cloud was unavailable on
-the tested account and accessible Nemotron variants did not reliably satisfy
-the full technical JSON contract. This is an evaluation configuration, not
-evidence that multiple agents improve trading results. Outputs retain source
-IDs and the final model also receives the original snapshot to reduce correlated
-summary risk.
+and the configured Decision model to the final proposal. Both configured tags
+passed a live structured-contract smoke test on 2026-08-14. This is an
+evaluation configuration, not evidence that multiple agents improve trading
+results. Outputs retain source IDs and the final model also receives the
+original snapshot to reduce correlated summary risk.
 
 Start PostgreSQL and initialize the schema:
 

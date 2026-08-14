@@ -1,7 +1,7 @@
 import pytest
 
 from backend.agents.contracts import MultiAgentDecision, NewsAnalysis, TechnicalAnalysis
-from backend.agents.multi_agent_pipeline import MultiAgentAnalysisPipeline
+from backend.agents.multi_agent_pipeline import MultiAgentAnalysisPipeline, StructuredAgentClient
 from backend.tests.run_multi_agent_historical_campaign import sample_completed
 
 
@@ -28,6 +28,35 @@ def test_empty_news_requires_no_news_report():
 
     with pytest.raises(ValueError, match="NO_NEWS"):
         MultiAgentAnalysisPipeline._validate_news_evidence(report, [])
+
+
+def test_news_without_source_ids_gets_deterministic_evidence_ids():
+    source = [
+        {"headline": "First", "source": "wire"},
+        {"id": "publisher-2", "headline": "Second", "source": "wire"},
+        {"id": "publisher-2", "headline": "Duplicate", "source": "wire"},
+    ]
+
+    prepared = MultiAgentAnalysisPipeline._prepare_news_context(source)
+
+    assert [row["id"] for row in prepared] == [
+        "snapshot-news-1",
+        "publisher-2",
+        "snapshot-news-3",
+    ]
+    assert "id" not in source[0]
+
+
+def test_new_cloud_role_models_get_contract_safe_budgets(monkeypatch):
+    monkeypatch.delenv("MULTI_AGENT_DEEPSEEK_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("MULTI_AGENT_GLM_MAX_TOKENS", raising=False)
+
+    assert StructuredAgentClient._request_limits("deepseek-v4-flash:cloud") == {
+        "max_tokens": 3000
+    }
+    assert StructuredAgentClient._request_limits("glm-5.2:cloud") == {
+        "max_tokens": 5000
+    }
 
 
 def test_technical_evidence_rejects_unknown_field_roots():

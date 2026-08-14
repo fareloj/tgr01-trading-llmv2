@@ -7,9 +7,9 @@ from dataclasses import dataclass
 
 
 DEFAULT_LLM_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_DECISION_MODEL = "nemotron-3-ultra:cloud"
-DEFAULT_NEWS_MODEL = "gpt-oss:20b-cloud"
-DEFAULT_TECHNICAL_MODEL = "gpt-oss:20b-cloud"
+DEFAULT_DECISION_MODEL = "glm-5.2:cloud"
+DEFAULT_NEWS_MODEL = "deepseek-v4-flash:cloud"
+DEFAULT_TECHNICAL_MODEL = "deepseek-v4-flash:cloud"
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}

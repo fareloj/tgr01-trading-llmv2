@@ -63,7 +63,7 @@ class TestDecisionAgentResponseFormat:
         monkeypatch.delenv("LLM_MODEL", raising=False)
         agent = DecisionAgent()
         assert agent.base_url == "http://localhost:11434/v1"
-        assert agent.model == "nemotron-3-ultra:cloud"
+        assert agent.model == "glm-5.2:cloud"
         assert agent._is_local_provider() is True
         assert agent._response_format(DecisionOutput, "decision_output")["type"] == "json_schema"
 

@@ -36,6 +36,20 @@ def hosted_env(monkeypatch):
 
 
 class TestDecisionAgentLocalBudget:
+    def test_glm_52_gets_contract_safe_budget(self, local_env, monkeypatch):
+        monkeypatch.setenv("LLM_MODEL", "glm-5.2:cloud")
+        agent = DecisionAgent()
+        assert agent._request_limits("decision") == {"max_tokens": 5000}
+        assert agent._request_limits("planner") == {"max_tokens": 3500}
+
+    def test_glm_52_budget_can_be_overridden(self, local_env, monkeypatch):
+        monkeypatch.setenv("LLM_MODEL", "glm-5.2:cloud")
+        monkeypatch.setenv("GLM_MAX_COMPLETION_TOKENS", "6000")
+        monkeypatch.setenv("GLM_PLANNER_MAX_COMPLETION_TOKENS", "4000")
+        agent = DecisionAgent()
+        assert agent._request_limits("decision") == {"max_tokens": 6000}
+        assert agent._request_limits("planner") == {"max_tokens": 4000}
+
     def test_nemotron_ultra_gets_contract_safe_budget(self, local_env, monkeypatch):
         monkeypatch.setenv("LLM_MODEL", "nemotron-3-ultra:cloud")
         agent = DecisionAgent()
@@ -73,6 +87,17 @@ class TestDecisionAgentLocalBudget:
 
 
 class TestPromptProfileRunnerLocalBudget:
+    def test_glm_52_gets_contract_safe_budget(self, local_env, monkeypatch):
+        monkeypatch.setenv("LLM_MODEL", "glm-5.2:cloud")
+        runner = PromptProfileRunner()
+        assert runner._request_limits() == {"max_tokens": 5000}
+
+    def test_glm_52_campaign_budget_can_be_overridden(self, local_env, monkeypatch):
+        monkeypatch.setenv("LLM_MODEL", "glm-5.2:cloud")
+        monkeypatch.setenv("GLM_MAX_COMPLETION_TOKENS", "6000")
+        runner = PromptProfileRunner()
+        assert runner._request_limits() == {"max_tokens": 6000}
+
     def test_nemotron_ultra_gets_contract_safe_budget(self, local_env, monkeypatch):
         monkeypatch.setenv("LLM_MODEL", "nemotron-3-ultra:cloud")
         runner = PromptProfileRunner()

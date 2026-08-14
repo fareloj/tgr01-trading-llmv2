@@ -20,7 +20,7 @@ from backend.agents.contracts import (
     NewsAnalysis,
     TechnicalAnalysis,
 )
-from backend.agents.decision_agent import load_api_keys
+from backend.agents.decision_agent import load_api_keys, unwrap_single_json_fence
 from backend.agents.model_config import MultiAgentModelConfig, resolve_multi_agent_model_config
 
 
@@ -53,8 +53,9 @@ trend, sideways, mixed, and high-volatility regimes. Positive MACD alone is not
 an uptrend when returns, EMA alignment, or slope disagree. Oversold/overbought
 describes condition, not an automatic reversal. If required market fields are
 missing, return INSUFFICIENT_DATA. Field paths are relative to
-technical_context and must begin with returns, trend, rsi, macd, ema,
-volatility, volume, drawdown, range, data_quality, or news. Keep summary under
+technical_context and must begin with current_price, status, returns, trend,
+rsi, macd, ema, ema_crossover, volatility, volatility_atr, volume,
+volume_profile, bollinger_bands, drawdown, range, data_quality, or news. Keep summary under
 350 characters. Return only the JSON object required by the supplied schema.
 """.strip()
 
@@ -133,6 +134,14 @@ class StructuredAgentClient:
 
     @staticmethod
     def _request_limits(model: str) -> dict:
+        if model.startswith("glm-5.2"):
+            return {
+                "max_tokens": int(os.getenv("MULTI_AGENT_GLM_MAX_TOKENS", "5000"))
+            }
+        if model.startswith("deepseek-v4-flash"):
+            return {
+                "max_tokens": int(os.getenv("MULTI_AGENT_DEEPSEEK_MAX_TOKENS", "3000"))
+            }
         if model.startswith("gpt-oss:") or model.startswith("openai/gpt-oss"):
             return {
                 "max_completion_tokens": int(os.getenv("MULTI_AGENT_GPT_OSS_MAX_TOKENS", "1800")),
@@ -182,7 +191,7 @@ class StructuredAgentClient:
             **self._request_limits(model),
         )
         latency_ms = (time.perf_counter() - started) * 1000
-        content = response.choices[0].message.content or ""
+        content = unwrap_single_json_fence(response.choices[0].message.content or "")
         try:
             decoded = json.loads(content)
             output = schema.model_validate(decoded)
@@ -207,6 +216,21 @@ class MultiAgentAnalysisPipeline:
         self.client = client or StructuredAgentClient(self.config)
 
     @staticmethod
+    def _prepare_news_context(news_context: list[dict]) -> list[dict]:
+        """Attach deterministic evidence IDs without mutating the source snapshot."""
+        prepared = []
+        seen_ids = set()
+        for index, item in enumerate(news_context):
+            record = dict(item)
+            candidate = str(record.get("id") or "").strip()
+            if not candidate or candidate in seen_ids:
+                candidate = f"snapshot-news-{index + 1}"
+            record["id"] = candidate
+            seen_ids.add(candidate)
+            prepared.append(record)
+        return prepared
+
+    @staticmethod
     def _validate_news_evidence(report: NewsAnalysis, news_context: list[dict]) -> NewsAnalysis:
         available_ids = {str(item.get("id")) for item in news_context if item.get("id") is not None}
         if any(item not in available_ids for item in report.evidence_news_ids):
@@ -218,14 +242,19 @@ class MultiAgentAnalysisPipeline:
     @staticmethod
     def _validate_technical_evidence(report: TechnicalAnalysis, technical_context: dict) -> TechnicalAnalysis:
         allowed_roots = {
+            "current_price",
+            "status",
             "returns",
             "trend",
             "rsi",
             "macd",
             "ema",
+            "ema_crossover",
             "volatility",
             "volatility_atr",
             "volume",
+            "volume_profile",
+            "bollinger_bands",
             "drawdown",
             "range",
             "data_quality",
@@ -302,7 +331,7 @@ class MultiAgentAnalysisPipeline:
 
     def run(self, snapshot: dict) -> MultiAgentPipelineResult:
         news_input = {
-            "news_context": snapshot.get("news_context", []),
+            "news_context": self._prepare_news_context(snapshot.get("news_context", [])),
             "data_health": snapshot.get("data_health", {}),
             "deterministic_news_risk": snapshot.get("news_risk", {}),
         }

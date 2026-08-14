@@ -306,6 +306,22 @@ def test_analysis_plan_truncates_only_non_executable_rationale():
     assert plan.requests[0].tool == "donchian_breakout"
 
 
+def test_analysis_plan_accepts_one_whole_response_json_fence():
+    raw = "```json\n" + json.dumps({"requests": [], "rationale": "Sem ferramentas."}) + "\n```"
+
+    plan = parse_analysis_plan(raw)
+
+    assert plan.requests == []
+    assert plan.rationale == "Sem ferramentas."
+
+
+def test_analysis_plan_rejects_fenced_json_with_surrounding_prose():
+    raw = "Resultado:\n```json\n" + json.dumps({"requests": [], "rationale": "x"}) + "\n```"
+
+    with pytest.raises(json.JSONDecodeError):
+        parse_analysis_plan(raw)
+
+
 def test_directional_decision_fails_closed_when_tool_context_is_degraded():
     decision = DecisionOutput(
         action="BUY",

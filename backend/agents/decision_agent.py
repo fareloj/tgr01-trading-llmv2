@@ -96,9 +96,16 @@ def has_llm_api_key() -> bool:
     return bool(load_api_keys())
 
 
+def unwrap_single_json_fence(raw_json: str) -> str:
+    """Unwrap one whole-response JSON fence without accepting surrounding prose."""
+    stripped = (raw_json or "").strip()
+    match = re.fullmatch(r"```(?:json)?\s*\r?\n(?P<body>.*?)\r?\n```", stripped, re.DOTALL | re.IGNORECASE)
+    return match.group("body").strip() if match else stripped
+
+
 def parse_analysis_plan(raw_json: str) -> AnalysisPlan:
     """Normalize non-executable prose while keeping tool contracts strict."""
-    parsed = json.loads(raw_json)
+    parsed = json.loads(unwrap_single_json_fence(raw_json))
     if not isinstance(parsed, dict):
         raise ValueError("analysis plan must be a JSON object")
     rationale = parsed.get("rationale", "")
@@ -276,6 +283,14 @@ class DecisionAgent:
         )
 
     def _request_limits(self, purpose: str) -> dict:
+        if self.model.startswith("glm-5.2"):
+            env_name = (
+                "GLM_PLANNER_MAX_COMPLETION_TOKENS"
+                if purpose == "planner"
+                else "GLM_MAX_COMPLETION_TOKENS"
+            )
+            default_budget = "3500" if purpose == "planner" else "5000"
+            return {"max_tokens": int(os.getenv(env_name, default_budget))}
         if self.model.startswith("nemotron-3-ultra"):
             env_name = (
                 "NEMOTRON_PLANNER_MAX_COMPLETION_TOKENS"
@@ -533,7 +548,9 @@ class DecisionAgent:
                     **self._request_limits("decision"),
                 )
                 raw_json = response.choices[0].message.content
-                parsed_output = DecisionOutput.model_validate_json(raw_json)
+                parsed_output = DecisionOutput.model_validate_json(
+                    unwrap_single_json_fence(raw_json)
+                )
                 normalized = replace_generic_hold_reason(parsed_output, payload)
                 return enforce_payload_decision_constraints(normalized, payload)
 
