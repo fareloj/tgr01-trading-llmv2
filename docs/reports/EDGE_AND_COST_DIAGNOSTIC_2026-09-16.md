@@ -185,12 +185,14 @@ Alavancas disponiveis, em ordem de custo de implementacao:
   cobre regimes fora de fev-jun/2026.
 - `neutral-fresh` usa noticias sinteticas; nao valida desempenho com noticia real.
 - A particao `validation` e o `holdout` selado nao foram tocados.
-- Os 5 ciclos de cada janela comecam em timestamps diferentes e cobrem 60 minutos
-  a partir de cada um. Eles **se sobrepoem** (o ciclo 1 cobre 15:10-16:10, o ciclo
-  5 cobre 15:30-16:30) e os movimentos realizados diferem entre ciclos, mas as
-  observacoes compartilham amplamente o mesmo trecho de mercado. As 120 amostras
+- Os 5 ciclos de cada janela comecam em timestamps diferentes (a cada 5 minutos)
+  e cada um projeta um horizonte de 60 minutos a partir do proprio inicio. Eles
+  **se sobrepoem** sem serem identicos: o ciclo 1 cobre 15:10-16:10 e realiza
+  +0.522%, o ciclo 5 cobre 15:30-16:31 e realiza +0.089%. As 120 amostras
   representam 24 janelas contextualmente relacionadas, nao 120 observacoes
-  independentes, o que estreita de forma irreal qualquer intervalo de confianca
-  calculado sobre elas.
+  independentes. Um intervalo de confianca calculado sobre elas seria estreito
+  demais **se tratar as linhas como independentes**; um bootstrap por blocos ou
+  clusters que modele a dependencia pode ser valido, e e o que a metrica
+  pre-registrada exige.
 - Nao ha claim de lucro nem de perda em producao: isto e uma avaliacao
   retrospectiva em condicoes conhecidas.
