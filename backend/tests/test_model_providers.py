@@ -248,6 +248,31 @@ class TestCredentialEndpointBinding:
         with pytest.raises(ValueError, match="http"):
             resolve_multi_agent_model_config()
 
+    def test_tls_downgrade_is_rejected(self, monkeypatch):
+        """Hostname alone is not enough: http would expose the credential."""
+        monkeypatch.setenv("NEWS_PROVIDER", "opencode-go")
+        monkeypatch.setenv("NEWS_MODEL", "qwen3.7-plus")
+        monkeypatch.setenv("NEWS_BASE_URL", "http://opencode.ai/v1")
+
+        with pytest.raises(ValueError, match="origin"):
+            resolve_multi_agent_model_config()
+
+    def test_unregistered_port_is_rejected(self, monkeypatch):
+        monkeypatch.setenv("NEWS_PROVIDER", "opencode-go")
+        monkeypatch.setenv("NEWS_MODEL", "qwen3.7-plus")
+        monkeypatch.setenv("NEWS_BASE_URL", "https://opencode.ai:444/v1")
+
+        with pytest.raises(ValueError, match="origin"):
+            resolve_multi_agent_model_config()
+
+    def test_embedded_credentials_are_rejected(self, monkeypatch):
+        monkeypatch.setenv("NEWS_PROVIDER", "opencode-go")
+        monkeypatch.setenv("NEWS_MODEL", "qwen3.7-plus")
+        monkeypatch.setenv("NEWS_BASE_URL", "https://user:pw@opencode.ai/v1")
+
+        with pytest.raises(ValueError, match="credentials"):
+            resolve_multi_agent_model_config()
+
     def test_ollama_cloud_does_not_fall_back_to_the_daemon_key(self, monkeypatch):
         """LLM_API_KEY belongs to the local daemon; it must not reach the cloud."""
         monkeypatch.setenv("LLM_API_KEY", "local-daemon-key")
@@ -273,6 +298,15 @@ class TestProviderModelAllowlist:
         monkeypatch.setenv("NEWS_MODEL", "qwen3.7-plus")
 
         assert resolve_multi_agent_model_config().news.model == "qwen3.7-plus"
+
+    @pytest.mark.parametrize("lookalike", ["qwen3.7-evil", "qwen3.8anything", "qwen3.7", "qwen3.9-plus"])
+    def test_opencode_go_rejects_lookalike_names(self, monkeypatch, lookalike):
+        """A shared prefix must not smuggle an unsanctioned model in."""
+        monkeypatch.setenv("NEWS_PROVIDER", "opencode-go")
+        monkeypatch.setenv("NEWS_MODEL", lookalike)
+
+        with pytest.raises(ValueError, match="not sanctioned"):
+            resolve_multi_agent_model_config()
 
     def test_ollama_has_no_model_allowlist(self, monkeypatch):
         monkeypatch.setenv("NEWS_MODEL", "any-tag-at-all:cloud")
@@ -454,6 +488,48 @@ class TestResponseFormatFallback:
             FakeError("connection reset")
         )
 
+    def test_cause_adjacency_prevents_a_false_downgrade(self):
+        """The red-team counterexample: a real cause named after the format token."""
+        class FakeError(Exception):
+            def __init__(self, message, status_code=None, body=None):
+                super().__init__(message)
+                self.status_code = status_code
+                self.body = body
+
+        assert not StructuredAgentClient._is_json_schema_rejection(
+            FakeError("response_format=json_schema accepted; temperature is unsupported", 400)
+        )
+        # A genuine refusal is still detected.
+        assert StructuredAgentClient._is_json_schema_rejection(
+            FakeError("response_format: json_schema is not supported", 400)
+        )
+        assert StructuredAgentClient._is_json_schema_rejection(
+            FakeError("unsupported response_format type json_schema", 422)
+        )
+
+    def test_structured_error_body_wins_when_it_names_the_parameter(self):
+        class FakeError(Exception):
+            def __init__(self, message, status_code=None, body=None):
+                super().__init__(message)
+                self.status_code = status_code
+                self.body = body
+
+        assert StructuredAgentClient._is_json_schema_rejection(
+            FakeError(
+                "provider rejected the request",
+                400,
+                body={"error": {"message": "bad parameter", "param": "response_format"}},
+            )
+        )
+        # A different named parameter must not downgrade.
+        assert not StructuredAgentClient._is_json_schema_rejection(
+            FakeError(
+                "provider rejected the request",
+                400,
+                body={"error": {"message": "bad parameter", "param": "temperature"}},
+            )
+        )
+
     def test_failed_fallback_does_not_poison_later_calls(self, monkeypatch):
         """The downgrade is remembered only after it produced valid output."""
         from backend.agents.contracts import NewsAnalysis
@@ -497,9 +573,47 @@ class TestResponseFormatFallback:
         )
 
         assert output.output.status == "NO_NEWS"
-        key = f"news:{role_model.model}"
+        key = (
+            f"news:{role_model.model}:{role_model.provider}:"
+            f"{role_model.base_url.rstrip('/')}"
+        )
         assert client._response_format_override[key] == {"type": "json_object"}
         assert client.response_format_for("news") == "json_object_fallback"
+
+    def test_downgrade_is_not_shared_across_endpoints(self, monkeypatch):
+        """A different endpoint must re-probe the strict contract, not inherit it."""
+        from backend.agents.contracts import NewsAnalysis
+
+        monkeypatch.setenv("LLM_API_KEY", "ollama")
+        client = StructuredAgentClient()
+        first = client.config.news
+        client._clients[(first.provider, first.base_url.rstrip("/"))] = _FakeClient(
+            strict_error=_HttpError("This response_format type is unavailable now", 400),
+            fallback_content='{"status":"NO_NEWS","bias":"UNCERTAIN","confidence":0,"summary":"none"}',
+        )
+        client.call(
+            role="news", role_model=first, system_prompt="p", payload={}, schema=NewsAnalysis
+        )
+
+        second = RoleModel(
+            role="news",
+            model=first.model,
+            provider=first.provider,
+            base_url="http://127.0.0.1:11434/v1",
+            temperature=0.0,
+            max_tokens=100,
+        )
+        client._clients[(second.provider, second.base_url.rstrip("/"))] = _FakeClient(
+            fallback_content='{"status":"NO_NEWS","bias":"UNCERTAIN","confidence":0,"summary":"none"}',
+        )
+        client.call(
+            role="news", role_model=second, system_prompt="p", payload={}, schema=NewsAnalysis
+        )
+
+        # The second endpoint accepted json_schema, so it must not be recorded as
+        # a fallback even though the first endpoint had one.
+        assert len(client._response_format_override) == 1
+        assert not any(second.base_url.rstrip("/") in key for key in client._response_format_override)
 
     def test_call_exposes_auditable_diagnostics(self, monkeypatch):
         """A fail-closed HOLD must be explainable from the recorded metadata."""

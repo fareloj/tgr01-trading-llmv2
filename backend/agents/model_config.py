@@ -107,15 +107,21 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
     ),
 }
 
-# Models sanctioned per provider. A role may not resolve a model outside this
-# list, so a typo cannot spend quota on an expensive or unsanctioned model.
+# Models sanctioned per provider, as anchored regular expressions. A role may not
+# resolve a model outside this list, so a typo cannot spend quota elsewhere.
 PROVIDER_MODEL_ALLOWLIST: dict[str, tuple[str, ...]] = {
     # The local daemon proxies any Ollama Cloud tag, so no restriction here.
     "ollama": (),
     "ollama-cloud": (),
     # OpenCode Go is a paid subscription with per-model monthly caps. Only the
-    # Qwen 3.7/3.8 family is sanctioned for this project.
-    "opencode-go": ("qwen3.7", "qwen3.8"),
+    # Qwen 3.7/3.8 family is sanctioned for this project. The pattern enumerates
+    # the sanctioned variants and is matched with fullmatch, so a lookalike such
+    # as "qwen3.7-evil" or "qwen3.8anything" cannot pass by sharing a prefix.
+    # Add a variant here explicitly when one is approved.
+    "opencode-go": (
+        r"qwen3\.7-(?:max|plus|flash)",
+        r"qwen3\.8-(?:max|plus|flash)",
+    ),
 }
 
 
@@ -168,46 +174,64 @@ def resolve_provider(name: str) -> ProviderSpec:
     return PROVIDER_REGISTRY[normalized]
 
 
-def _endpoint_host(url: str) -> str:
-    return urlparse(url).hostname or ""
+def _endpoint_origin(url: str) -> tuple[str, str, int | None]:
+    """Return (scheme, hostname, port) with the scheme's default port filled in."""
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+    port = parsed.port
+    if port is None:
+        port = 443 if scheme == "https" else 80 if scheme == "http" else None
+    return scheme, host, port
 
 
 def resolve_allowed_base_url(provider: str, override: str) -> str:
-    """Bind a base URL override to its provider's own host.
+    """Bind a base URL override to its provider's registered origin.
 
     A role supplies `<ROLE>_PROVIDER` for the credential and `<ROLE>_BASE_URL` for
     the endpoint. Without this check a typo in the URL would send one provider's
-    API key, and its session header, to an arbitrary host. An override is only
-    accepted when it stays on the registered host for that provider; otherwise the
-    resolution fails closed instead of leaking the credential.
+    API key, and its session header, to an arbitrary host.
+
+    The whole origin must match: scheme, hostname and effective port. Checking only
+    the hostname would still allow a TLS downgrade (`http://`) or an unregistered
+    port, both of which expose the credential. Embedded userinfo is rejected too.
     """
     spec = resolve_provider(provider)
     candidate = (override or "").strip()
     if not candidate:
         return spec.base_url
 
-    if not candidate.startswith(("http://", "https://")):
+    parsed = urlparse(candidate)
+    if parsed.scheme.lower() not in ("http", "https"):
         raise ValueError(f"base URL for provider {provider!r} must be an http(s) URL")
+    if parsed.username or parsed.password:
+        raise ValueError(f"base URL for provider {provider!r} must not embed credentials")
 
-    if _endpoint_host(candidate) != _endpoint_host(spec.base_url):
+    if _endpoint_origin(candidate) != _endpoint_origin(spec.base_url):
         raise ValueError(
-            f"base URL host {_endpoint_host(candidate)!r} does not match provider "
-            f"{provider!r} host {_endpoint_host(spec.base_url)!r}; refusing to send "
+            f"base URL origin {_endpoint_origin(candidate)!r} does not match provider "
+            f"{provider!r} origin {_endpoint_origin(spec.base_url)!r}; refusing to send "
             f"this provider's credential to a different endpoint"
         )
     return candidate
 
 
 def _check_model_sanctioned(role: str, provider: str, model: str) -> None:
-    """Refuse a model outside the provider's sanctioned list."""
+    """Refuse a model outside the provider's sanctioned list.
+
+    The check uses anchored patterns so a lookalike name such as
+    `qwen3.7-evil` cannot pass by sharing a prefix with a sanctioned model.
+    """
     allowed = PROVIDER_MODEL_ALLOWLIST.get(provider, ())
     if not allowed:
         return
-    if any(model.startswith(prefix) for prefix in allowed):
+    normalized = (model or "").strip().lower()
+    if any(re.fullmatch(pattern, normalized) for pattern in allowed):
         return
     raise ValueError(
         f"{role.upper()}_MODEL {model!r} is not sanctioned for provider "
-        f"{provider!r}; allowed prefixes: {', '.join(allowed)}"
+        f"{provider!r}; expected an exact sanctioned id matching one of: "
+        f"{', '.join(allowed)}"
     )
 
 

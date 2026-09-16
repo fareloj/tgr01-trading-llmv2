@@ -28,6 +28,23 @@ FEATURE_COLUMNS = (
 )
 
 
+# Semantic version of the indicator math behind FEATURE_COLUMNS. Column names do
+# not change when a definition changes, so artifacts built before and after a
+# change are otherwise indistinguishable. Bump this whenever a feature's formula
+# changes, and record it in every exported dataset and campaign descriptor.
+#
+#   version 1: rsi_14 was a simple moving average of gains/losses.
+#   version 2: rsi_14 is Wilder (1978) with an SMA seed, matching the live path.
+INDICATOR_DEFINITION_VERSION = 2
+
+INDICATOR_DEFINITIONS = {
+    "rsi_14": "wilder-1978-sma-seed-alpha-1/14",
+    "atr_14_pct": "true-range-mean-14-including-current",
+    "macd_hist_pct": "ema12-ema26-signal9-adjust-false",
+    "bollinger_z_20": "close-minus-sma20-over-std20-ddof0",
+}
+
+
 @dataclass(frozen=True)
 class DatasetConfig:
     timeframe_seconds: int = 60
@@ -383,6 +400,8 @@ def dataset_metadata(dataset: pd.DataFrame, config: DatasetConfig) -> dict:
         "first_timestamp": int(dataset["timestamp"].min()) if not dataset.empty else None,
         "last_timestamp": int(dataset["timestamp"].max()) if not dataset.empty else None,
         "feature_columns": list(FEATURE_COLUMNS),
+        "indicator_definitions": dict(INDICATOR_DEFINITIONS),
+        "indicator_definition_version": INDICATOR_DEFINITION_VERSION,
         "label_distribution": {str(key): int(value) for key, value in labels.items()},
     }
 

@@ -35,6 +35,7 @@ from backend.evaluation.multi_agent_snapshots import (
     select_stratified_samples,
 )
 from backend.risk.risk_manager import RiskManager
+from backend.ml.dataset import INDICATOR_DEFINITION_VERSION, INDICATOR_DEFINITIONS
 
 
 DEFAULT_MANIFEST = BACKEND_DIR / "data_exports" / "historical_evaluation" / "manifest.json"
@@ -305,6 +306,11 @@ def main() -> int:
             "technical": prompt_hash(TECHNICAL_SYSTEM_PROMPT),
             "decision": prompt_hash(DECISION_SYSTEM_PROMPT),
         },
+        # Indicator semantics, so a campaign started before an indicator change
+        # cannot resume alongside samples produced after it. Column names alone do
+        # not change when a formula changes.
+        "indicator_definition_version": INDICATOR_DEFINITION_VERSION,
+        "indicator_definitions": dict(INDICATOR_DEFINITIONS),
         "synthetic_news_fixtures": True,
         "future_label_not_in_model_input": True,
         "writes_trading_state": False,
@@ -312,7 +318,9 @@ def main() -> int:
     if args.resume and output.exists():
         report = json.loads(output.read_text(encoding="utf-8"))
         if report.get("config") != descriptor:
-            raise SystemExit("resume output does not match current models/prompts/dataset")
+            raise SystemExit(
+                "resume output does not match current models/prompts/dataset/indicators"
+            )
         report["results"] = [item for item in report.get("results", []) if sample_completed(item)]
     else:
         report = {

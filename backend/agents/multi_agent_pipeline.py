@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import TypeVar
@@ -250,24 +251,42 @@ class StructuredAgentClient:
             },
         ]
 
+    # An unsupported-format phrase must sit next to the format token, allowing
+    # only harmless connector characters between them. This rejects a message
+    # like "response_format=json_schema accepted; temperature is unsupported",
+    # where the semicolon breaks the adjacency and the real cause is temperature.
+    _FORMAT_TOKEN = r"(?:response_format|json_schema)"
+    _UNSUPPORTED_PHRASE = r"(?:unavailable|not\s+supported|unsupported|not\s+available)"
+    _ADJACENT_REFUSAL = re.compile(
+        r"(?:"
+        + _FORMAT_TOKEN + r"[\s\w=:,'-]{0,30}?" + _UNSUPPORTED_PHRASE
+        + r"|"
+        + _UNSUPPORTED_PHRASE + r"[\s\w=:,'-]{0,30}?" + _FORMAT_TOKEN
+        + r")",
+        re.IGNORECASE,
+    )
+
     @classmethod
     def _is_json_schema_rejection(cls, error: Exception) -> bool:
         """Distinguish 'this provider will not do json_schema' from other errors.
 
-        Requires both a response-format mention and an unsupported-format phrase,
-        so an unrelated 400 ("invalid temperature", "unknown field") is never
-        silently downgraded to json_object.
+        Prefers the structured error body when the provider names the offending
+        parameter, and otherwise requires the unsupported-format phrase to be
+        adjacent to the format token. A 400 caused by something else (invalid
+        temperature, unknown field) is never silently downgraded to json_object.
         """
         status = getattr(error, "status_code", None)
         if status not in (400, 404, 422):
             return False
-        message = str(error).lower()
-        mentions_format = "response_format" in message or "json_schema" in message
-        says_unsupported = any(
-            marker in message
-            for marker in ("unavailable now", "not supported", "unsupported", "not available")
-        )
-        return mentions_format and says_unsupported
+
+        body = getattr(error, "body", None)
+        payload = body.get("error", body) if isinstance(body, dict) else None
+        if isinstance(payload, dict):
+            param = str(payload.get("param") or "").lower()
+            if param in {"response_format", "response_format.type", "json_schema"}:
+                return True
+
+        return bool(cls._ADJACENT_REFUSAL.search(str(error)))
 
     def call(
         self,
@@ -286,9 +305,10 @@ class StructuredAgentClient:
         messages = self._build_messages(role, system_prompt, payload, schema)
         limits = self._request_limits(role_model)
 
-        # The override is keyed by role AND model, so a model swap re-probes the
-        # strict contract rather than inheriting another model's downgrade.
-        override_key = f"{role}:{resolved_model}"
+        # The override is keyed by role, model AND endpoint, so a model swap or a
+        # different provider endpoint re-probes the strict contract instead of
+        # inheriting another endpoint's downgrade.
+        override_key = f"{role}:{resolved_model}:{role_model.provider}:{role_model.base_url.rstrip('/')}"
         response_format = self._response_format_override.get(
             override_key
         ) or self._json_schema_format(role, schema)

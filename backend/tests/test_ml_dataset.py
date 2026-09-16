@@ -7,9 +7,12 @@ from backend.ml.baselines import evaluate_baselines, evaluate_predictions, momen
 from backend.ml.dataset import (
     DatasetConfig,
     FEATURE_COLUMNS,
+    INDICATOR_DEFINITION_VERSION,
+    INDICATOR_DEFINITIONS,
     build_market_dataset,
     build_market_sequence_dataset,
     chronological_split,
+    dataset_metadata,
     select_labeled_horizon,
 )
 from backend.ml.readiness import assess_training_readiness
@@ -233,3 +236,19 @@ def test_training_readiness_can_pass_explicit_test_thresholds():
     )
 
     assert readiness["ready_for_model_experiments"] is True
+
+def test_dataset_metadata_records_indicator_definition_version():
+    """Column names do not change when a feature formula changes, so the
+    metadata must record the semantics explicitly."""
+    frame = build_market_dataset(candles())
+
+    metadata = dataset_metadata(frame, DatasetConfig())
+
+    assert metadata["indicator_definition_version"] == INDICATOR_DEFINITION_VERSION
+    assert metadata["indicator_definitions"] == dict(INDICATOR_DEFINITIONS)
+    assert "wilder" in metadata["indicator_definitions"]["rsi_14"].lower()
+
+
+def test_indicator_version_is_bumped_for_the_wilder_rsi_change():
+    """Version 2 documents the move away from a simple moving average."""
+    assert INDICATOR_DEFINITION_VERSION >= 2
