@@ -243,8 +243,14 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
             logs.append(item)
 
     latest_price = float(latest_kline.close) if latest_kline else 0.0
-    equity = portfolio.get("BRL", 0.0) + portfolio.get("BTC", 0.0) * latest_price
-    exposure = (portfolio.get("BTC", 0.0) * latest_price / equity * 100.0) if equity else 0.0
+    btc_balance = portfolio.get("BTC", 0.0)
+    equity = portfolio.get("BRL", 0.0) + btc_balance * latest_price
+    # Without a price the BTC leg cannot be valued. If the account holds BTC, the
+    # exposure is unknown rather than zero: reporting 0% would understate risk.
+    if latest_kline is None and btc_balance > 0:
+        exposure = None
+    else:
+        exposure = (btc_balance * latest_price / equity * 100.0) if equity else 0.0
     daily_reference_equity = (
         float(first_equity_snapshot["equity_brl"]) if first_equity_snapshot else None
     )
@@ -289,7 +295,9 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
         "latest_kline": {
             "timestamp": int(latest_kline.timestamp) if latest_kline else None,
             "age_seconds": now - int(latest_kline.timestamp) if latest_kline else None,
-            "close": latest_price,
+            # None when there is no candle, so the console can distinguish an
+            # absent price from a legitimate zero close.
+            "close": float(latest_kline.close) if latest_kline else None,
         },
         "latest_news": {
             "timestamp": int(latest_news.timestamp) if latest_news else None,
@@ -301,7 +309,7 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
             "brl": portfolio.get("BRL", 0.0),
             "btc": portfolio.get("BTC", 0.0),
             "equity_brl": round(equity, 2),
-            "exposure_pct": round(exposure, 2),
+            "exposure_pct": round(exposure, 2) if exposure is not None else None,
             "daily_reference_equity_brl": round(daily_reference_equity, 2) if daily_reference_equity else None,
             "daily_drawdown_pct": round(daily_drawdown, 4) if daily_drawdown is not None else None,
             "daily_drawdown_limit_pct": RiskManager().max_daily_drawdown,

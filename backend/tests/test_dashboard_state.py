@@ -11,6 +11,7 @@ from backend.core.db_models import (
     rag_chunks,
     rag_documents,
     rag_retrieval_logs,
+    virtual_portfolio,
 )
 from backend.tests import dashboard_state
 
@@ -286,6 +287,46 @@ def test_freshness_policy_matches_the_pipeline_thresholds():
     assert policy["news_stale_threshold_seconds"] == NEWS_STALE_SECONDS
     assert policy["market_data_stale_threshold_seconds"] > 0
     assert policy["news_stale_threshold_seconds"] > 0
+
+
+def test_missing_candle_is_none_not_a_zero_price():
+    """An absent candle must not be reported as a 0.00 price.
+
+    Zero is a legitimate close value, so the two cases have to be
+    distinguishable or the console shows a fake price for missing data.
+    """
+    # The test DB is clean here, so there is no BTC/BRL kline.
+    state = dashboard_state.fetch_dashboard_state()
+
+    assert state["latest_kline"]["close"] is None
+    assert state["latest_kline"]["timestamp"] is None
+    assert state["latest_kline"]["age_seconds"] is None
+
+
+def test_exposure_is_unknown_without_a_price_when_btc_is_held():
+    """With BTC but no price, exposure must be unknown, not 0%.
+
+    Reporting 0% would claim the account is unexposed while it actually holds
+    BTC of unknown value.
+    """
+    now = int(time.time())
+    with database.engine.begin() as conn:
+        conn.execute(
+            virtual_portfolio.update()
+            .where(virtual_portfolio.c.currency == "BTC")
+            .values(amount=0.01)
+        )
+        conn.execute(
+            virtual_portfolio.update()
+            .where(virtual_portfolio.c.currency == "BRL")
+            .values(amount=1000)
+        )
+
+    state = dashboard_state.fetch_dashboard_state()
+
+    assert state["latest_kline"]["close"] is None
+    assert state["portfolio"]["exposure_pct"] is None
+    assert state["portfolio"]["btc"] == 0.01
 
 
 def test_execution_config_fails_closed_on_a_malformed_rate(monkeypatch):
