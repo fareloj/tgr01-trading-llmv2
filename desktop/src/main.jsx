@@ -357,7 +357,8 @@ function App() {
             <div><small>System Reliability</small><strong className="good">{Math.round((latest.system_reliability || 0) * 100)}%</strong></div>
             <div><small>Final Confidence</small><strong className="warn">{Math.round((latest.final_confidence || 0) * 100)}%</strong></div>
             <div><small>News Risk</small><strong className={newsRisk.risk_level === "NORMAL" ? "good" : "warn"}>{newsRisk.risk_level || "--"}</strong></div>
-            <div><small>Market / News Stale</small><strong>{dataHealth.is_market_data_stale ? "YES" : "NO"} / {dataHealth.is_news_stale ? "YES" : "NO"}</strong></div>
+            <div><small>Market / News Stale</small><strong>{dataHealth.is_market_data_stale == null && dataHealth.is_news_stale == null ? "--"
+              : `${dataHealth.is_market_data_stale === true ? "YES" : dataHealth.is_market_data_stale === false ? "NO" : "--"} / ${dataHealth.is_news_stale === true ? "YES" : dataHealth.is_news_stale === false ? "NO" : "--"}`}</strong></div>
             <div><small>Effective Price</small><strong>{latest.effective_price ? money(latest.effective_price) : "--"}</strong><em>BRL</em></div>
             <div><small>Fee / Slippage</small><strong>{latest.fee_brl ? `R$ ${money(latest.fee_brl)}` : "--"}</strong><em>{latest.slippage_rate != null ? `${(latest.slippage_rate * 100).toFixed(3)}%` : "--"}</em></div>
             <div><small>Equity Delta</small><strong className={(latest.equity_after_brl || 0) >= (latest.equity_before_brl || 0) ? "good" : "bad"}>{latest.equity_after_brl && latest.equity_before_brl ? money(latest.equity_after_brl - latest.equity_before_brl) : "--"}</strong><em>BRL</em></div>
