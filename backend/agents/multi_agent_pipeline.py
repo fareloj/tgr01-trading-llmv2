@@ -24,6 +24,7 @@ from backend.agents.contracts import (
 from backend.agents.decision_agent import unwrap_single_json_fence
 from backend.agents.model_config import (
     MultiAgentModelConfig,
+    assert_role_request_allowed,
     load_provider_api_keys,
     resolve_multi_agent_model_config,
     resolve_provider,
@@ -251,18 +252,30 @@ class StructuredAgentClient:
             },
         ]
 
-    # An unsupported-format phrase must sit next to the format token, allowing
-    # only harmless connector characters between them. This rejects a message
-    # like "response_format=json_schema accepted; temperature is unsupported",
-    # where the semicolon breaks the adjacency and the real cause is temperature.
+    # A refusal must tie the unsupported phrase to the format itself. The phrase
+    # has to be a nearby predicate of the format token, and the words between them
+    # must not name a different parameter. That rejects both
+    # "response_format=json_schema accepted; temperature is unsupported" (the
+    # semicolon breaks the gap) and "response_format valid model unavailable"
+    # (the gap names the model).
     _FORMAT_TOKEN = r"(?:response_format|json_schema)"
-    _UNSUPPORTED_PHRASE = r"(?:unavailable|not\s+supported|unsupported|not\s+available)"
-    _ADJACENT_REFUSAL = re.compile(
-        r"(?:"
-        + _FORMAT_TOKEN + r"[\s\w=:,'-]{0,30}?" + _UNSUPPORTED_PHRASE
-        + r"|"
-        + _UNSUPPORTED_PHRASE + r"[\s\w=:,'-]{0,30}?" + _FORMAT_TOKEN
-        + r")",
+    _NEGATIVE_PHRASE = r"(?P<neg>is\s+not\s+supported|are\s+not\s+supported|not\s+supported|is\s+unsupported|unsupported|is\s+unavailable|unavailable|not\s+available|is\s+not\s+available)"
+    _REFUSAL_PATTERNS = (
+        re.compile(
+            _FORMAT_TOKEN + r"(?P<gap>[\s\w=:,'-]{0,20}?)" + _NEGATIVE_PHRASE,
+            re.IGNORECASE,
+        ),
+        re.compile(
+            _NEGATIVE_PHRASE + r"(?P<gap>[\s\w=:,'-]{0,20}?)" + _FORMAT_TOKEN,
+            re.IGNORECASE,
+        ),
+    )
+
+    # Names of other request parameters. If one appears between the format token
+    # and the unsupported phrase, the format is not what was rejected.
+    _OTHER_CAUSE = re.compile(
+        r"(?:temperature|max_tokens|max_completion_tokens|model|top_p|"
+        r"frequency_penalty|presence_penalty|context_length|unknown\s+field)",
         re.IGNORECASE,
     )
 
@@ -270,10 +283,11 @@ class StructuredAgentClient:
     def _is_json_schema_rejection(cls, error: Exception) -> bool:
         """Distinguish 'this provider will not do json_schema' from other errors.
 
-        Prefers the structured error body when the provider names the offending
-        parameter, and otherwise requires the unsupported-format phrase to be
-        adjacent to the format token. A 400 caused by something else (invalid
-        temperature, unknown field) is never silently downgraded to json_object.
+        Prefers the structured error body when the provider names response_format
+        as the offending parameter. Otherwise the unsupported phrase must be a
+        predicate of the format token with no other parameter intervening. A
+        400/404 caused by anything else (invalid temperature, unknown model,
+        unknown field) is never silently downgraded.
         """
         status = getattr(error, "status_code", None)
         if status not in (400, 404, 422):
@@ -286,7 +300,29 @@ class StructuredAgentClient:
             if param in {"response_format", "response_format.type", "json_schema"}:
                 return True
 
-        return bool(cls._ADJACENT_REFUSAL.search(str(error)))
+        message = str(error)
+        for pattern in cls._REFUSAL_PATTERNS:
+            for match in pattern.finditer(message):
+                gap = match.groupdict().get("gap") or ""
+                if not cls._OTHER_CAUSE.search(gap):
+                    return True
+        return False
+
+    # Numeric fields that JSON producers sometimes emit as 70.0 instead of 70.
+    # Only integral floats are converted; anything fractional still fails strict
+    # validation rather than being silently truncated.
+    _CONFIDENCE_FIELDS = ("conviction", "confidence")
+
+    @classmethod
+    def _normalize_integral_floats(cls, decoded: object) -> object:
+        if not isinstance(decoded, dict):
+            return decoded
+        normalized = dict(decoded)
+        for field in cls._CONFIDENCE_FIELDS:
+            value = normalized.get(field)
+            if isinstance(value, float) and value.is_integer():
+                normalized[field] = int(value)
+        return normalized
 
     def call(
         self,
@@ -301,6 +337,15 @@ class StructuredAgentClient:
         if role_model is None:
             role_model = self.config.role(role)
         resolved_model = model or role_model.model
+        # Revalidate at the point of use. RoleModel is a plain dataclass and the
+        # `model` argument is a free override, so startup validation alone could be
+        # bypassed and send a provider key to an unregistered endpoint.
+        assert_role_request_allowed(
+            role=role,
+            provider=role_model.provider,
+            model=resolved_model,
+            base_url=role_model.base_url,
+        )
         client = self._client_for(role_model)
         messages = self._build_messages(role, system_prompt, payload, schema)
         limits = self._request_limits(role_model)
@@ -340,8 +385,10 @@ class StructuredAgentClient:
         try:
             decoded = json.loads(content)
             # strict=True keeps the post-fallback path as strong as the provider
-            # enforced json_schema one: no silent string->int coercion.
-            output = schema.model_validate(decoded, strict=True)
+            # enforced json_schema one: no silent string->int coercion. An integral
+            # float like 70.0 is legitimate JSON-Schema integer output, so it is
+            # normalized first; fractional values still fail.
+            output = schema.model_validate(self._normalize_integral_floats(decoded), strict=True)
         except Exception as error:
             preview = content[:600].replace("\n", "\\n")
             raise ValueError(f"invalid {role} JSON output: {type(error).__name__}; preview={preview!r}") from error

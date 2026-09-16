@@ -10,6 +10,8 @@ from typing import Callable
 import pandas as pd
 
 from backend.ml.dataset import (
+    INDICATOR_DEFINITION_VERSION,
+    INDICATOR_DEFINITIONS,
     DatasetConfig,
     build_market_dataset,
     build_market_sequence_dataset,
@@ -123,6 +125,10 @@ def build_dataset_from_chunks(
         "label_distribution": dict(label_counts),
         "domain_metadata": dict(domain_metadata or {}),
         "include_context_rows": include_context_rows,
+        # Indicator semantics, so a chunk-built dataset is not mistaken for one
+        # produced under a different feature definition.
+        "indicator_definition_version": INDICATOR_DEFINITION_VERSION,
+        "indicator_definitions": dict(INDICATOR_DEFINITIONS),
         "config": config.as_dict(),
     }
     if metadata_path:

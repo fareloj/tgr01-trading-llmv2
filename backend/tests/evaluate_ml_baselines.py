@@ -12,7 +12,11 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from backend.ml.baselines import evaluate_baselines
-from backend.ml.dataset import chronological_split, select_labeled_horizon
+from backend.ml.dataset import (
+    INDICATOR_DEFINITION_VERSION,
+    chronological_split,
+    select_labeled_horizon,
+)
 from backend.ml.readiness import assess_training_readiness
 
 
@@ -65,6 +69,11 @@ def _markdown(report: dict) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate deterministic baselines on a purged temporal split.")
     parser.add_argument("--input", default=str(REPORTS_DIR / "last_ml_dataset.csv"))
+    parser.add_argument(
+        "--metadata",
+        default=None,
+        help="Dataset metadata JSON; defaults to the sibling *_metadata.json of --input.",
+    )
     parser.add_argument("--horizon", type=int, default=15)
     parser.add_argument("--round-trip-cost-pct", type=float, default=0.15)
     parser.add_argument("--train-ratio", type=float, default=0.60)
@@ -82,6 +91,29 @@ def main() -> int:
     missing = required.difference(dataset.columns)
     if missing:
         raise SystemExit(f"Dataset missing required columns: {', '.join(sorted(missing))}")
+
+    # Refuse to score a dataset whose indicator semantics are unknown or stale.
+    # Column names do not change when a feature formula changes, so an SMA-RSI
+    # dataset would otherwise be evaluated as if it were Wilder-RSI.
+    metadata_path = (
+        Path(args.metadata)
+        if args.metadata
+        else Path(args.input).with_name("last_ml_dataset_metadata.json")
+    )
+    indicator_version = None
+    if metadata_path.exists():
+        try:
+            indicator_version = json.loads(metadata_path.read_text(encoding="utf-8")).get(
+                "indicator_definition_version"
+            )
+        except (OSError, json.JSONDecodeError):
+            indicator_version = None
+    if indicator_version != INDICATOR_DEFINITION_VERSION:
+        raise SystemExit(
+            f"Dataset indicator_definition_version is {indicator_version!r}, expected "
+            f"{INDICATOR_DEFINITION_VERSION}. Rebuild the dataset before scoring it, "
+            "because an older artifact may use a different indicator definition."
+        )
     original_rows = len(dataset)
     dataset = select_labeled_horizon(dataset, args.horizon)
     if dataset.empty:
@@ -96,6 +128,7 @@ def main() -> int:
     partitions = {"train": split.train, "validation": split.validation, "test": split.test}
     report = {
         "dataset_path": str(Path(args.input).resolve()),
+        "indicator_definition_version": indicator_version,
         "horizon_minutes": args.horizon,
         "round_trip_cost_pct": args.round_trip_cost_pct,
         "source_rows": original_rows,

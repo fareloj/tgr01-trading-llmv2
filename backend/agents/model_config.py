@@ -235,6 +235,28 @@ def _check_model_sanctioned(role: str, provider: str, model: str) -> None:
     )
 
 
+def assert_role_request_allowed(
+    *,
+    role: str,
+    provider: str,
+    model: str,
+    base_url: str,
+) -> None:
+    """Validate the three values that decide where a credential is sent.
+
+    `_resolve_role` calls this at startup, and `StructuredAgentClient` calls it
+    again at the point of use. The second check matters because `RoleModel` is a
+    plain dataclass and `call()` accepts a `model` override: without revalidating
+    at the sink, a constructed or overridden value could bypass the startup
+    checks and send a provider key to an unregistered endpoint.
+
+    An empty `base_url` is treated as "use the registered default".
+    """
+    spec = resolve_provider(provider)
+    resolve_allowed_base_url(spec.name, base_url or spec.base_url)
+    _check_model_sanctioned(role, spec.name, model)
+
+
 def load_provider_api_keys(provider: str) -> list[str]:
     """Read credentials for one provider using the same conventions as the agent.
 

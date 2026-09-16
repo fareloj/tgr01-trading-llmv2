@@ -14,6 +14,8 @@ and was probed on 2026-09-16 against the real Pydantic contracts:
   opencode-go    qwen3.7-plus         0.0   accepted (needs session header)
 """
 
+import json
+
 import pytest
 
 from backend.agents.model_config import (
@@ -455,6 +457,80 @@ class TestStrictNumericContracts:
             )
 
 
+class TestSinkRevalidation:
+    """Startup validation alone is bypassable: RoleModel is a plain dataclass and
+    `call()` accepts a free `model` override, so the client revalidates at use."""
+
+    def test_forged_role_model_with_foreign_endpoint_is_rejected(self, monkeypatch):
+        from backend.agents.contracts import NewsAnalysis
+
+        monkeypatch.setenv("OPENCODE_GO_API_KEY", "secret-go-key")
+        client = StructuredAgentClient()
+        forged = RoleModel(
+            role="news",
+            model="qwen3.7-plus",
+            provider="opencode-go",
+            base_url="https://evil.example/v1",
+            temperature=0.0,
+            max_tokens=100,
+            session_header=OPENCODE_GO_SESSION_HEADER,
+        )
+
+        with pytest.raises(ValueError, match="different endpoint"):
+            client.call(
+                role="news", role_model=forged, system_prompt="p", payload={}, schema=NewsAnalysis
+            )
+
+    def test_model_override_outside_the_allowlist_is_rejected(self, monkeypatch):
+        from backend.agents.contracts import NewsAnalysis
+
+        monkeypatch.setenv("OPENCODE_GO_API_KEY", "go-key")
+        client = StructuredAgentClient()
+        # The allowlist is provider scoped, so the role must be on OpenCode Go.
+        role_model = RoleModel(
+            role="news",
+            model="qwen3.7-plus",
+            provider="opencode-go",
+            base_url=OPENCODE_GO_BASE_URL,
+            temperature=0.0,
+            max_tokens=100,
+            session_header=OPENCODE_GO_SESSION_HEADER,
+        )
+
+        with pytest.raises(ValueError, match="not sanctioned"):
+            client.call(
+                role="news",
+                role_model=role_model,
+                model="qwen3.7-evil",
+                system_prompt="p",
+                payload={},
+                schema=NewsAnalysis,
+            )
+
+    def test_role_request_allowed_accepts_a_sanctioned_configuration(self, monkeypatch):
+        from backend.agents.model_config import assert_role_request_allowed
+
+        monkeypatch.setenv("OPENCODE_GO_API_KEY", "go-key")
+        # Must not raise.
+        assert_role_request_allowed(
+            role="news",
+            provider="opencode-go",
+            model="qwen3.7-plus",
+            base_url="",
+        )
+
+    def test_role_request_allowed_rejects_a_foreign_endpoint(self):
+        from backend.agents.model_config import assert_role_request_allowed
+
+        with pytest.raises(ValueError, match="different endpoint"):
+            assert_role_request_allowed(
+                role="news",
+                provider="opencode-go",
+                model="qwen3.7-plus",
+                base_url="https://evil.example/v1",
+            )
+
+
 class TestResponseFormatFallback:
     def test_rejection_detection_matches_only_format_errors(self):
         class FakeError(Exception):
@@ -488,6 +564,22 @@ class TestResponseFormatFallback:
             FakeError("connection reset")
         )
 
+    def test_integral_float_conviction_is_normalized(self):
+        """70.0 is a legitimate JSON-Schema integer; strict mode must not fail it."""
+        normalized = StructuredAgentClient._normalize_integral_floats(
+            {"action": "BUY", "conviction": 70.0, "thesis": "t"}
+        )
+
+        assert normalized["conviction"] == 70
+        assert isinstance(normalized["conviction"], int)
+
+    def test_fractional_conviction_is_not_normalized(self):
+        normalized = StructuredAgentClient._normalize_integral_floats(
+            {"action": "BUY", "conviction": 70.5, "thesis": "t"}
+        )
+
+        assert normalized["conviction"] == 70.5
+
     def test_cause_adjacency_prevents_a_false_downgrade(self):
         """The red-team counterexample: a real cause named after the format token."""
         class FakeError(Exception):
@@ -498,6 +590,10 @@ class TestResponseFormatFallback:
 
         assert not StructuredAgentClient._is_json_schema_rejection(
             FakeError("response_format=json_schema accepted; temperature is unsupported", 400)
+        )
+        # The format is fine; the model is what is unavailable.
+        assert not StructuredAgentClient._is_json_schema_rejection(
+            FakeError("response_format valid model unavailable", 404)
         )
         # A genuine refusal is still detected.
         assert StructuredAgentClient._is_json_schema_rejection(
@@ -595,13 +691,16 @@ class TestResponseFormatFallback:
             role="news", role_model=first, system_prompt="p", payload={}, schema=NewsAnalysis
         )
 
+        # Same origin string, different endpoint path: not a different credential
+        # sink, but still a distinct client cache entry.
         second = RoleModel(
             role="news",
             model=first.model,
             provider=first.provider,
-            base_url="http://127.0.0.1:11434/v1",
+            base_url=first.base_url.rstrip("/") + "/v1",
             temperature=0.0,
             max_tokens=100,
+            session_header=first.session_header,
         )
         client._clients[(second.provider, second.base_url.rstrip("/"))] = _FakeClient(
             fallback_content='{"status":"NO_NEWS","bias":"UNCERTAIN","confidence":0,"summary":"none"}',
@@ -640,8 +739,10 @@ class TestResponseFormatFallback:
         assert diagnostics["response_format"] == "json_schema"
         assert diagnostics["max_tokens"] == role_model.max_tokens
         assert diagnostics["reasoning_effort"] == role_model.reasoning_effort
-        # No secret or credential may appear in the diagnostics.
-        assert not any("key" in str(field).lower() for field in diagnostics.values())
+        # The diagnostics must not carry the credential value itself.
+        rendered = json.dumps(diagnostics)
+        assert "ollama-key" not in rendered
+        assert "go-key" not in rendered
 
     def test_json_schema_format_matches_the_contract(self):
         from backend.agents.contracts import NewsAnalysis
