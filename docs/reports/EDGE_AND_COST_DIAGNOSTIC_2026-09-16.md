@@ -13,13 +13,14 @@ movimento tipico do ativo no horizonte de decisao.
 O que este resultado sustenta: **para a politica atual, nesta particao e com
 estes custos, o edge bruto observado nao cobriu o custo de transacao.**
 
-O que ele NAO sustenta: uma afirmacao universal de que "nenhum prompt resolve".
-Uma unica particao `development`, com 24 janelas contextualmente relacionadas,
-nao exclui comportamento seletivo melhor, efeitos de prompt nao testados, ou
-defeitos ainda nao descobertos. A conclusao correta e mais estreita: o custo
-configurado excedeu o edge bruto desta amostra, e a diferenca e grande o
-suficiente para que qualquer proxima campanha precise tratar custo e horizonte
-como variavel primaria. Ver a secao "Proximo experimento" no fim.
+O que ele NAO sustenta: uma afirmacao universal de que "nenhum prompt resolve"
+ou de que a proxima campanha necessariamente repetira este numero. Uma unica
+particao `development`, com 24 janelas contextualmente relacionadas, nao exclui
+comportamento seletivo melhor, efeitos de prompt nao testados, ou defeitos ainda
+nao descobertos. A conclusao correta e mais estreita: o custo configurado excedeu
+o edge bruto desta amostra, a margem e de ordens de grandeza, e a distancia e
+grande o suficiente para que a proxima campanha trate custo e horizonte como
+variavel primaria. Ver a secao "Proximo experimento".
 
 ## O que foi medido
 
@@ -105,13 +106,17 @@ Testado contra o movimento futuro real das mesmas linhas:
 Baseline aleatorio = 50%. O MACD tem um sinal fraco em 15m (58.5%) que
 desaparece em 60m (50.0%). As amostras de RSI sao poucas demais para concluir.
 
-**Estimativa de ordem de grandeza, nao de retorno esperado.** Se cada acerto e
-erro valesse a mediana do movimento absoluto, o ganho bruto esperado em 15m seria
-`(0.585 - 0.415) * 0.159 = 0.027%`, contra um custo de 0.70% (e um hurdle de
-0.90%). Este calculo **superestima** o resultado, porque assume que a magnitude
-media dos acertos e dos erros e igual; se os erros tiverem magnitude maior (o
-padrao tipico), o resultado real e pior. Ele serve apenas para mostrar que a
-diferenca e de ordens de grandeza, nao para estimar lucro ou perda.
+**Isto e uma ilustracao, nao uma estimativa.** Multiplicar acerto por movimento
+mediano ignora que acertos e erros podem ter magnitudes diferentes. Nesta amostra
+de 15m eles tem: seguindo o MACD, o movimento absoluto medio foi 0.2837% nos 38
+acertos e 0.2259% nos 27 erros, o que da um ganho bruto assinado medio de
+**+0.0720%** — ou seja, a formula ilustrativa `(0.585 - 0.415) * 0.159 = 0.027%`
+**subestima** o resultado desta amostra, nao o superestima.
+
+A conclusao nao muda, e a distancia e o ponto: **+0.0720% de ganho bruto medio
+contra um custo de 0.70% por round-trip.** O ganho bruto observado e cerca de um
+decimo do custo. Mesmo com o sinal direcional do MACD em 15m sendo o melhor de
+todos os testados, ele nao chega perto de pagar a transacao.
 
 ## Interpretacao
 
@@ -128,15 +133,18 @@ diferenca e de ordens de grandeza, nao para estimar lucro ou perda.
 
 ## Proximo experimento
 
-**Decisao pendente do operador, nao do agente.** Antes de rodar uma campanha
-maior, uma destas alavancas precisa entrar no escopo, porque a proxima campanha
-com o desenho atual reproduzira este resultado com mais amostras e o mesmo custo.
+**Decisao pendente do operador, nao do agente.** A proxima campanha com o desenho
+atual teria que superar a mesma distancia entre ganho bruto e custo que esta
+amostra mediu, sem nenhuma mudanca de premissa. Se o operador nao quiser mudar
+nada, a campanha maior serve para estreitar o intervalo de confianca sobre um
+resultado que ja aponta negativo, nao para descobrir um edge novo.
 
 Verificacao que deve vir PRIMEIRO, porque e barata e determina se o problema e
 real: **confirmar a taxa efetiva da conta**. `PAPER_FEE_RATE=0.003` e uma
-premissa do arquivo de configuracao, nao uma medicao. O validador de dry-run ja
-le as fees reais da exchange (`backend/execution/mb_order_dry_run.py`); se a taxa
-real for menor, o custo cai proporcionalmente e a leitura inteira muda.
+premissa do arquivo de configuracao, nao uma medicao. O cliente autenticado ja
+consulta as fees reais da exchange (`backend/execution/mb_private_client.py`,
+usado por `backend/tests/validate_mb_order_dry_run.py`); se a taxa real for menor,
+o custo cai proporcionalmente e a leitura inteira muda.
 
 Experimento proposto para a proxima campanha, se a taxa se confirmar alta:
 
@@ -145,9 +153,11 @@ Experimento proposto para a proxima campanha, se a taxa se confirmar alta:
 - **Escopo:** somente particao `development`. `validation` e `holdout` permanecem
   intocados. Prompts, thresholds do Risk Manager e regras de risco ficam
   congelados; nenhuma alteracao de codigo durante a coleta.
-- **Metrica de aceitacao, pre-registrada:** `directional_edge_after_cost_pct`
-  medio positivo com intervalo de confianca block-bootstrap que nao cruze zero,
-  em pelo menos 2 dos 3 regimes, com no minimo 30 acoes direcionais aprovadas.
+- **Metrica de aceitacao, pre-registrada:** media de
+  `directional_edge_after_cost_pct` positiva, com intervalo de confianca de 95%
+  por block-bootstrap sobre blocos contiguos de 24h, que nao cruze zero, em pelo
+  menos 2 dos 3 regimes, com no minimo 30 acoes direcionais aprovadas **por
+  regime** (90 no total).
 - **Criterio de falha:** se a media continuar negativa, o desenho de horizonte
   curto esta encerrado como evidencia e o proximo passo vira a alavanca 2
   (operar raramente, apenas quando o movimento esperado exceder varias vezes o
@@ -157,10 +167,9 @@ Alavancas disponiveis, em ordem de custo de implementacao:
 
 1. **Horizonte maior.** Operar em horas/dias, onde o movimento tipico supera o
    custo. Um movimento de 3-5% paga 0.70% com folga; um de 0.16% nunca paga.
-2. **Operar raramente.** Fornecer o hurdle de custo ao LLM no payload para que ele
+2. **Operar raramente.** Fornecer o custo esperado ao LLM no payload para que ele
    calibre conviccao contra ele, e so agir quando o movimento esperado exceder
-   varias vezes o custo. O gate ja existe (`directional_edge_after_cost_pct`), mas
-   o LLM nao o recebe hoje.
+   varias vezes o custo. Hoje o LLM nao recebe nenhum campo de custo.
 3. **Confirmar custo.** Verificar a taxa real antes de qualquer conclusao.
 4. **Avaliar saidas, nao entradas.** O red team de 2026-08-01 ja apontava que
    "o principal trabalho restante e qualidade direcional em regimes bearish,
