@@ -6,10 +6,27 @@ import {
   costHurdles,
   describeModelRoles,
   formatPercent,
+  freshnessTone,
   hurdleCoverage,
   summarizeDecisions,
   toFiniteNumber
 } from "./cost.mjs";
+
+test("freshnessTone never paints an unknown or stale reading as healthy", () => {
+  // Unknown age must be neutral, not good.
+  assert.equal(freshnessTone(null, null), "");
+  assert.equal(freshnessTone(undefined, null), "");
+  assert.equal(freshnessTone("abc", null), "");
+  // A real fresh reading is good.
+  assert.equal(freshnessTone(2, null), "good");
+  assert.equal(freshnessTone(0, null), "good");
+  // Stale flag wins.
+  assert.equal(freshnessTone(2, true), "bad");
+  assert.equal(freshnessTone(null, true), "bad");
+  // A known limit is enforced.
+  assert.equal(freshnessTone(1200, null, 1200), "good");
+  assert.equal(freshnessTone(1201, null, 1200), "bad");
+});
 
 test("toFiniteNumber treats null, blank and boolean as absent, not zero", () => {
   assert.equal(toFiniteNumber(null), null);

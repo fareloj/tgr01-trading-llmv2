@@ -105,6 +105,20 @@ export function summarizeDecisions(logs = []) {
  * executable, so the operator can see the gate the prompt is calibrated against.
  */
 /**
+ * Decide the tone for a freshness reading. A missing or stale value must never
+ * look healthy: unknown returns "" (the neutral tone), a known violation returns
+ * "bad", and only a real, recent reading returns "good".
+ */
+export function freshnessTone(ageSeconds, staleFlag, limitSeconds = null) {
+  if (staleFlag === true) return "bad";
+  const age = toFiniteNumber(ageSeconds);
+  if (age == null) return "";
+  const limit = toFiniteNumber(limitSeconds);
+  if (limit != null && age > limit) return "bad";
+  return "good";
+}
+
+/**
  * Describe the conviction the model must reach for its proposal to be
  * executable. `newsAvailable` is true/false when the snapshot shows the news
  * rows the gate consumed, and null when that is unknown; null must report

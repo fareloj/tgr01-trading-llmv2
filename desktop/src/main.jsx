@@ -11,6 +11,7 @@ import {
   costHurdles,
   describeModelRoles,
   formatPercent,
+  freshnessTone,
   hurdleCoverage,
   summarizeDecisions
 } from "./cost.mjs";
@@ -80,6 +81,9 @@ const money = value => Number(value || 0).toLocaleString("pt-BR", { minimumFract
 const seconds = value => value == null ? "--" : value < 60 ? `${Math.round(value)}s` : `${Math.floor(value / 60)}m`;
 const localTime = timestamp => timestamp ? new Date(timestamp * 1000).toLocaleTimeString("pt-BR") : "--";
 const healthTone = status => status === "healthy" || status === "OK" ? "good" : "bad";
+// Returns a finite number, or null when the value is absent/unusable. Callers
+// render null as "--", so an unknown risk value is never shown as zero.
+const numberOrDash = value => value == null || !Number.isFinite(Number(value)) ? null : Number(value);
 
 function StatusDot({ tone = "muted" }) {
   return <span className={`status-dot ${tone}`} />;
@@ -270,6 +274,16 @@ function App() {
   const dataHealth = snapshot.data_health || {};
   const newsRisk = snapshot.news_risk || {};
   const portfolioRisk = snapshot.portfolio || state.portfolio || {};
+  // Audit drawdown/limit: prefer the snapshot values, fall back to the portfolio
+  // state, and stay unknown when neither source supplies a number. The limit is
+  // never invented, so an unknown limit is shown as unknown instead of 10%.
+  const auditDrawdown = numberOrDash(
+    portfolioRisk.daily_drawdown_percentage ?? state.portfolio?.daily_drawdown_pct
+  );
+  const auditDrawdownLimit = numberOrDash(
+    portfolioRisk.daily_drawdown_limit_percentage ?? state.portfolio?.daily_drawdown_limit_pct
+  );
+  const markedEquity = numberOrDash(portfolioRisk.equity_brl ?? state.portfolio?.equity_brl);
   const entries = state.entry_evaluation?.entries?.slice(-8).reverse() || [];
   const displayEntries = entries.length ? entries : (state.logs || []).slice(0, 8).map(log => ({
     ...log, kind: log.action === "BUY" || log.action === "SELL" ? "approved" : log.llm_action === "BUY" || log.llm_action === "SELL" ? "blocked" : "observed",
@@ -304,8 +318,8 @@ function App() {
     <main className="main-area">
       <header className="infra-bar" id="overview">
         <TopStatus icon={Gauge} label="Mode" value="PAPER" />
-        <TopStatus icon={Database} label="Database" value={state.database?.backend || "PostgreSQL"} detail="Connected" />
-        <TopStatus icon={UsersRound} label="Workers" value={`${healthyWorkers} / 2 Healthy`} />
+        <TopStatus icon={Database} label="Database" value={state.database?.backend || "unknown"} detail={state.database?.label ? "Connected" : "unknown"} tone={state.database?.label ? "good" : "bad"} />
+        <TopStatus icon={UsersRound} label="Workers" value={`${healthyWorkers} / 2 Healthy`} tone={healthyWorkers === 2 ? "good" : "bad"} />
         <TopStatus icon={Brain} label="Official RAG" value={(state.external_rag?.status || "unknown").toUpperCase()} detail={`D ${state.external_rag?.dense_indexed ?? 0} / L ${state.external_rag?.lexical_indexed ?? 0}`} tone={state.external_rag?.status === "ready" ? "good" : "bad"} />
         <TopStatus icon={Clock3} label="Clock" value={state.clock?.status === "OK" ? "Verified" : "Review"} detail={`Skew: ${state.clock?.skew_seconds ?? "--"}s`} tone={state.clock?.status === "OK" ? "good" : "bad"} />
         <button className="icon-button" title="Refresh state" aria-label="Refresh state" onClick={refresh}><RefreshCw size={16} /></button>
@@ -317,9 +331,9 @@ function App() {
       <section className="metric-strip">
         <MetricCard title="price_worker"><strong><StatusDot tone={healthTone(workers.price_worker?.status)} />{workers.price_worker?.status || "--"}</strong><span>Last heartbeat</span><p>{seconds(workers.price_worker?.age_seconds)} ago</p></MetricCard>
         <MetricCard title="news_worker"><strong><StatusDot tone={healthTone(workers.news_worker?.status)} />{workers.news_worker?.status || "--"}</strong><span>Last heartbeat</span><p>{seconds(workers.news_worker?.age_seconds)} ago</p></MetricCard>
-        <MetricCard title="Latest Candle (BTC/BRL 1m)"><h3>{money(state.latest_kline?.close)} <small>BRL</small></h3><span>Age</span><p className="good">{seconds(state.latest_kline?.age_seconds)} ago</p></MetricCard>
-        <MetricCard title={`Latest News (${state.latest_news?.source || "--"})`}><p className="headline">{state.latest_news?.headline || "Nenhuma notícia"}</p><span>Age</span><p className="good">{seconds(state.latest_news?.age_seconds)} ago</p></MetricCard>
-        <MetricCard title="Paper Position"><h3>{money(state.position?.avg_cost_brl)} <small>BRL avg</small></h3><span>Quantity / provenance</span><p>{Number(state.position?.quantity || 0).toFixed(8)} BTC · {state.position?.reconciliation?.method || "native paper"}</p></MetricCard>
+        <MetricCard title="Latest Candle (BTC/BRL 1m)"><h3>{state.latest_kline?.close == null || state.latest_kline.close === 0 ? "--" : money(state.latest_kline.close)} <small>BRL</small></h3><span>Age</span><p className={freshnessTone(state.latest_kline?.age_seconds, null, null)}>{state.latest_kline?.age_seconds == null ? "idade desconhecida" : `${seconds(state.latest_kline.age_seconds)} ago`}</p></MetricCard>
+        <MetricCard title={`Latest News (${state.latest_news?.source || "--"})`}><p className="headline">{state.latest_news?.headline || "Nenhuma notícia"}</p><span>Age</span><p className={freshnessTone(state.latest_news?.age_seconds, null, null)}>{state.latest_news?.age_seconds == null ? "idade desconhecida" : `${seconds(state.latest_news.age_seconds)} ago`}</p></MetricCard>
+        <MetricCard title="Paper Position"><h3>{state.position?.avg_cost_brl == null ? "--" : money(state.position.avg_cost_brl)} <small>BRL avg</small></h3><span>Quantity / provenance</span><p>{state.position == null ? "sem posicao paper registrada" : `${Number(state.position.quantity || 0).toFixed(8)} BTC · ${state.position.reconciliation?.method || "native paper"}`}</p></MetricCard>
         <MetricCard title="Daily Paper Risk"><h3 className={state.portfolio?.daily_drawdown_pct == null ? "" : (state.portfolio.daily_drawdown_pct >= (state.portfolio?.daily_drawdown_limit_pct ?? 10) ? "bad" : "good")}>{state.portfolio?.daily_drawdown_pct == null ? "--" : `${state.portfolio.daily_drawdown_pct.toFixed(2)}%`}</h3><span>Equity / BTC exposure</span><p>R$ {state.portfolio?.equity_brl == null ? "--" : money(state.portfolio.equity_brl)} · {state.portfolio?.exposure_pct == null ? "--" : `${Number(state.portfolio.exposure_pct).toFixed(2)}%`}</p></MetricCard>
       </section>
 
@@ -353,18 +367,18 @@ function App() {
             <div><small>RSI (14)</small><strong>{technical.rsi_value ?? "--"}</strong><em>{technical.rsi_status || "--"}</em></div>
             <div><small>MACD</small><strong>{technical.macd_histogram ?? "--"}</strong><em>{technical.macd_status || "--"}</em></div>
             <div><small>ATR (14)</small><strong>{technical.volatility_atr ?? "--"}</strong></div>
-            <div><small>Price</small><strong>{money(latest.execution_price)}</strong><em>BRL</em></div>
-            <div><small>System Reliability</small><strong className="good">{Math.round((latest.system_reliability || 0) * 100)}%</strong></div>
-            <div><small>Final Confidence</small><strong className="warn">{Math.round((latest.final_confidence || 0) * 100)}%</strong></div>
-            <div><small>News Risk</small><strong className={newsRisk.risk_level === "NORMAL" ? "good" : "warn"}>{newsRisk.risk_level || "--"}</strong></div>
+            <div><small>Price</small><strong>{latest.execution_price == null ? "--" : money(latest.execution_price)}</strong><em>BRL</em></div>
+            <div><small>System Reliability</small><strong className={latest.system_reliability == null ? "" : "good"}>{latest.system_reliability == null ? "--" : `${Math.round(latest.system_reliability * 100)}%`}</strong></div>
+            <div><small>Final Confidence</small><strong className={latest.final_confidence == null ? "" : "warn"}>{latest.final_confidence == null ? "--" : `${Math.round(latest.final_confidence * 100)}%`}</strong></div>
+            <div><small>News Risk</small><strong className={newsRisk.risk_level == null ? "" : newsRisk.risk_level === "NORMAL" ? "good" : "warn"}>{newsRisk.risk_level || "--"}</strong></div>
             <div><small>Market / News Stale</small><strong>{dataHealth.is_market_data_stale == null && dataHealth.is_news_stale == null ? "--"
               : `${dataHealth.is_market_data_stale === true ? "YES" : dataHealth.is_market_data_stale === false ? "NO" : "--"} / ${dataHealth.is_news_stale === true ? "YES" : dataHealth.is_news_stale === false ? "NO" : "--"}`}</strong></div>
-            <div><small>Effective Price</small><strong>{latest.effective_price ? money(latest.effective_price) : "--"}</strong><em>BRL</em></div>
-            <div><small>Fee / Slippage</small><strong>{latest.fee_brl ? `R$ ${money(latest.fee_brl)}` : "--"}</strong><em>{latest.slippage_rate != null ? `${(latest.slippage_rate * 100).toFixed(3)}%` : "--"}</em></div>
-            <div><small>Equity Delta</small><strong className={(latest.equity_after_brl || 0) >= (latest.equity_before_brl || 0) ? "good" : "bad"}>{latest.equity_after_brl && latest.equity_before_brl ? money(latest.equity_after_brl - latest.equity_before_brl) : "--"}</strong><em>BRL</em></div>
-            <div><small>Realized PnL</small><strong className={(latest.realized_pnl_brl || 0) >= 0 ? "good" : "bad"}>{latest.realized_pnl_brl != null ? money(latest.realized_pnl_brl) : "--"}</strong><em>BRL</em></div>
-            <div><small>Daily Drawdown</small><strong className={(portfolioRisk.daily_drawdown_percentage ?? state.portfolio?.daily_drawdown_pct ?? 0) >= (portfolioRisk.daily_drawdown_limit_percentage ?? state.portfolio?.daily_drawdown_limit_pct ?? 10) ? "bad" : "good"}>{portfolioRisk.daily_drawdown_percentage == null && state.portfolio?.daily_drawdown_pct == null ? "--" : `${Number(portfolioRisk.daily_drawdown_percentage ?? state.portfolio?.daily_drawdown_pct).toFixed(2)}%`}</strong><em>limit {Number(portfolioRisk.daily_drawdown_limit_percentage ?? state.portfolio?.daily_drawdown_limit_pct ?? 10).toFixed(2)}%</em></div>
-            <div><small>Marked Equity</small><strong>{money(portfolioRisk.equity_brl ?? state.portfolio?.equity_brl)}</strong><em>BRL</em></div>
+            <div><small>Effective Price</small><strong>{latest.effective_price == null ? "--" : money(latest.effective_price)}</strong><em>BRL</em></div>
+            <div><small>Fee / Slippage</small><strong>{latest.fee_brl == null ? "--" : `R$ ${money(latest.fee_brl)}`}</strong><em>{latest.slippage_rate != null ? `${(latest.slippage_rate * 100).toFixed(3)}%` : "--"}</em></div>
+            <div><small>Equity Delta</small><strong className={latest.equity_after_brl == null || latest.equity_before_brl == null ? "" : latest.equity_after_brl >= latest.equity_before_brl ? "good" : "bad"}>{latest.equity_after_brl == null || latest.equity_before_brl == null ? "--" : money(latest.equity_after_brl - latest.equity_before_brl)}</strong><em>BRL</em></div>
+            <div><small>Realized PnL</small><strong className={latest.realized_pnl_brl == null ? "" : latest.realized_pnl_brl >= 0 ? "good" : "bad"}>{latest.realized_pnl_brl == null ? "--" : money(latest.realized_pnl_brl)}</strong><em>BRL</em></div>
+            <div><small>Daily Drawdown</small><strong className={auditDrawdown == null ? "" : auditDrawdown >= auditDrawdownLimit ? "bad" : "good"}>{auditDrawdown == null ? "--" : `${auditDrawdown.toFixed(2)}%`}</strong><em>{auditDrawdownLimit == null ? "limite desconhecido" : `limit ${auditDrawdownLimit.toFixed(2)}%`}</em></div>
+            <div><small>Marked Equity</small><strong>{markedEquity == null ? "--" : money(markedEquity)}</strong><em>BRL</em></div>
           </div>
           <footer>Snapshot ID: {latest.id || "--"} <span>kline_age: {seconds(dataHealth.kline_age_seconds)} · news_age: {seconds(dataHealth.news_age_seconds)}</span></footer>
         </article>
