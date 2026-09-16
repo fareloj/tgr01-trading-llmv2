@@ -18,9 +18,10 @@ ou de que a proxima campanha necessariamente repetira este numero. Uma unica
 particao `development`, com 24 janelas contextualmente relacionadas, nao exclui
 comportamento seletivo melhor, efeitos de prompt nao testados, ou defeitos ainda
 nao descobertos. A conclusao correta e mais estreita: o custo configurado excedeu
-o edge bruto desta amostra, a margem e de ordens de grandeza, e a distancia e
-grande o suficiente para que a proxima campanha trate custo e horizonte como
-variavel primaria. Ver a secao "Proximo experimento".
+o edge bruto desta amostra, a margem e grande (cerca de uma ordem de grandeza: o
+melhor ganho bruto observado foi 0.0720% contra 0.70% de custo), e a distancia e
+suficiente para que a proxima campanha trate custo e horizonte como variavel
+primaria. Ver a secao "Proximo experimento".
 
 ## O que foi medido
 
@@ -127,9 +128,12 @@ todos os testados, ele nao chega perto de pagar a transacao.
    incompativel com o custo de 0.35%/lado assumido nesta amostra**.
 3. O custo de 0.35%/lado (fee 0.30% + slippage minimo 0.05%) e uma premissa
    configuravel do projeto (`PAPER_FEE_RATE`, `PAPER_MIN_SLIPPAGE_RATE`), nao uma
-   medicao feita nesta sessao. Se o custo real de execucao for menor, tudo cai na
-   mesma proporcao e a conclusao deve ser recalculada; ele nao foi verificado
-   contra a tabela de fees da exchange. Ver "Proximo experimento".
+   medicao feita nesta sessao. Ele nao foi verificado contra a tabela de fees da
+   exchange. Se a fee real for menor, o custo cai, mas **nao proporcionalmente**:
+   o slippage minimo (0.05%/lado) permanece como piso, e o edge liquido depende de
+   como cada movimento cruza o novo hurdle. Com fee zero, o custo de BUY ainda
+   seria 0.10%, nao zero. A conclusao precisa ser recalculada com a taxa real, nao
+   escalada linearmente. Ver "Proximo experimento".
 
 ## Proximo experimento
 
@@ -144,7 +148,7 @@ real: **confirmar a taxa efetiva da conta**. `PAPER_FEE_RATE=0.003` e uma
 premissa do arquivo de configuracao, nao uma medicao. O cliente autenticado ja
 consulta as fees reais da exchange (`backend/execution/mb_private_client.py`,
 usado por `backend/tests/validate_mb_order_dry_run.py`); se a taxa real for menor,
-o custo cai proporcionalmente e a leitura inteira muda.
+o custo cai (com o piso de slippage) e a leitura deve ser refeita.
 
 Experimento proposto para a proxima campanha, se a taxa se confirmar alta:
 
@@ -181,8 +185,12 @@ Alavancas disponiveis, em ordem de custo de implementacao:
   cobre regimes fora de fev-jun/2026.
 - `neutral-fresh` usa noticias sinteticas; nao valida desempenho com noticia real.
 - A particao `validation` e o `holdout` selado nao foram tocados.
-- Os 5 ciclos por janela compartilham o mesmo movimento de 60 minutos, entao as
-  120 amostras representam 24 janelas contextualmente relacionadas, nao 120
-  observacoes independentes.
+- Os 5 ciclos de cada janela comecam em timestamps diferentes e cobrem 60 minutos
+  a partir de cada um. Eles **se sobrepoem** (o ciclo 1 cobre 15:10-16:10, o ciclo
+  5 cobre 15:30-16:30) e os movimentos realizados diferem entre ciclos, mas as
+  observacoes compartilham amplamente o mesmo trecho de mercado. As 120 amostras
+  representam 24 janelas contextualmente relacionadas, nao 120 observacoes
+  independentes, o que estreita de forma irreal qualquer intervalo de confianca
+  calculado sobre elas.
 - Nao ha claim de lucro nem de perda em producao: isto e uma avaliacao
   retrospectiva em condicoes conhecidas.
