@@ -6,7 +6,7 @@ Leia `AGENTS.md` na raiz antes de commitar: o protocolo de revisao e obrigatorio
 ## Estado atual do repositorio
 
 - Branch: `main`, working tree limpo.
-- **27 commits locais a frente de `origin/main` (d99055a). Nada foi enviado.**
+- **28 commits locais a frente de `origin/main` (d99055a). Nada foi enviado.**
 - O `git push` esta bloqueado por autenticacao: nao ha token em ambiente,
   `~/.git-credentials`, nem chave SSH. O Git Credential Manager pede um dialogo
   grafico que um agente nao consegue responder. **O operador precisa rodar
@@ -32,9 +32,17 @@ Comandos exatos (o `py -3.11` global nao tem as dependencias):
 
 ```powershell
 & ".\.venv\Scripts\python.exe" -m pytest backend\tests -q
-cd desktop; npm test
-cd desktop; $env:ELECTRON_DISABLE_SANDBOX="1"; npm run test:electron
+Set-Location .\desktop
+npm test
+$env:ELECTRON_DISABLE_SANDBOX="1"; npm run test:electron
 ```
+
+**Atencao a uma confusao recorrente**: o Codex CLI, rodando em sandbox
+`read-only`, costuma reportar que nao conseguiu rodar os testes ("`.venv` aponta
+para um Python ausente" ou `EPERM` do Vite). Isso e limitacao do sandbox dele,
+nao do ambiente. Neste repositorio os comandos acima funcionam. Nao trate um
+relatorio de "nao consegui rodar" como evidencia de que a suite falha; rode voce
+mesmo e cite a contagem real.
 
 ## Trabalho concluido nesta sessao
 
@@ -112,13 +120,23 @@ Campanha de 120 amostras na particao `development`. Depois do fix acima, o Risk
 Manager aprova direcionais (antes: 100% bloqueado). Resultado:
 
 - **Margem liquida media negativa em todos os horizontes** (-0.48% a -0.57%).
-- **A causa e aritmetica, nao de prompt**: o custo configurado e 0.35%/lado
-  (fee 0.30% + slippage min 0.05%), entao BUY tem hurdle de 0.70% round-trip. O
-  movimento mediano (valor absoluto) em 60m e **0.470%**; so 21% das janelas
-  atingem o hurdle completo de 0.90%.
-- **O MACD que o modelo recebe preve a direcao em 60m com 50.0%** — uma moeda
-  justa. Em 15m tem 58.5%, que ainda nao paga o custo.
+- **A causa observada e o custo contra o movimento**: o custo configurado e
+  0.35%/lado (fee 0.30% + slippage min 0.05%), entao BUY tem hurdle de 0.70%
+  round-trip. O movimento mediano (valor absoluto) em 60m e **0.470%**; so 21%
+  das janelas atingem o hurdle completo de 0.90%.
+- **O MACD que o modelo recebe previu a direcao em 60m com 50.0%** nesta amostra
+  — uma moeda justa. Em 15m teve 58.5%, que ainda nao paga o custo.
 - 14 das 29 direcionais aprovadas foram **contra** o regime esperado da janela.
+
+**Limitacoes desta medicao — leia antes de generalizar:**
+
+- As 120 linhas representam apenas **24 janelas sobrepostas** (5 ciclos cada),
+  nao 120 observacoes independentes.
+- Uma **unica particao** (`development`), em fev-jun/2026. Nao e walk-forward.
+- Noticias **sinteticas** (`neutral-fresh`); nao valida desempenho com noticia real.
+- Portanto o resultado sustenta que *nesta amostra e com estes custos* o edge
+  bruto nao cobriu o custo. Nao sustenta uma afirmacao universal de que nenhuma
+  mudanca de prompt ou politica pode alterar o resultado.
 
 Este relatorio passou por **4 passadas de revisao adversarial** do gpt-5.6-sol e
 foi declarado ACCURATE no final. Todo numero foi recalculado por um validador
@@ -161,20 +179,27 @@ tom neutro. Nunca `0`, `NO`, verde ou `NORMAL`.
 
 ### Bloqueado pelo operador
 
-1. **`git push origin main`** (27 commits locais).
+1. **`git push origin main`** (28 commits locais).
 
 ### Decisao pendente do operador (nao do agente)
 
-O gargalo do projeto e horizonte versus custo. Nenhum ajuste de prompt muda isso.
-O relatorio de diagnostico propos um experimento pre-registrado, mas a escolha da
-alavanca exige sign-off:
+O gargalo medido e custo versus horizonte: o custo de 0.70% round-trip e maior
+que o movimento tipico do ativo no horizonte de minutos desta amostra. Ajustar
+prompt para "melhorar acerto" nao ataca essa distancia — mas isso e conclusao
+desta amostra, nao uma prova de que nenhuma politica melhoraria.
 
-- Horizonte maior (horas/dias), onde o movimento tipico supera o custo.
+A escolha da alavanca exige sign-off. Sao hipoteses a testar, nao fatos
+observados:
+
+- Horizonte maior (horas/dias), onde o movimento tipico poderia superar o custo.
 - Operar raramente, e dar ao LLM o custo esperado no payload para calibrar.
 - **Confirmar a taxa real da conta primeiro** — `PAPER_FEE_RATE=0.003` e premissa
   de configuracao, nao medicao. O cliente autenticado ja le as fees reais da
   exchange (`backend/execution/mb_private_client.py`, usado por
   `backend/tests/validate_mb_order_dry_run.py`).
+
+O experimento pre-registrado (hipotese, escopo, metrica de aceitacao e criterio de
+falha) esta na secao "Proximo experimento" do relatorio de diagnostico.
 
 ### Nao feito
 
