@@ -26,11 +26,88 @@ from backend.core.db_models import (
     trade_logs,
     virtual_portfolio,
 )
+from backend.agents.model_config import resolve_multi_agent_model_config
 from backend.core.clock_sync import check_clock_skew
+from backend.core.market_policy import LIVE_MAX_EXPOSURE_PCT
 from backend.core.runtime_safety import MAX_FUTURE_HEARTBEAT_SECONDS, REQUIRED_WORKERS
+from backend.execution.paper_simulator import PaperExecutionConfig
 from backend.rag.external_client import ExternalRagClient
 from backend.risk.portfolio_guard import trading_day_start
 from backend.risk.risk_manager import RiskManager
+
+
+def build_execution_config() -> dict:
+    """Expose the paper cost assumptions so the console can show the real hurdle.
+
+    The diagnostic showed the project's fee assumption dominates the horizon
+    decision, so the operator needs the numbers visible rather than implied.
+    Slippage is ATR-derived at execution time; these are the configured bounds.
+    """
+    config = PaperExecutionConfig.from_env()
+    one_side = config.fee_rate + config.min_slippage_rate
+    return {
+        "fee_rate": config.fee_rate,
+        "min_slippage_rate": config.min_slippage_rate,
+        "max_slippage_rate": config.max_slippage_rate,
+        "atr_slippage_factor": config.atr_slippage_factor,
+        "one_side_cost_pct": round(one_side * 100, 4),
+        "buy_round_trip_cost_pct": round(2 * one_side * 100, 4),
+        "sell_exit_cost_pct": round(one_side * 100, 4),
+    }
+
+
+def build_execution_config_safe() -> dict:
+    """`build_execution_config` with a fail-closed wrapper.
+
+    A malformed PAPER_* value makes PaperExecutionConfig raise. The dashboard is
+    a read-only view and must still render, so the failure is reported in-band
+    instead of taking the whole operator console down.
+    """
+    try:
+        return build_execution_config()
+    except (ValueError, TypeError) as error:
+        return {"error": f"{type(error).__name__}: {error}"}
+
+
+def build_model_roles() -> dict:
+    """Expose the resolved role models and their budgets, without credentials."""
+    try:
+        config = resolve_multi_agent_model_config()
+    except ValueError as error:
+        return {"error": str(error), "roles": {}, "enabled": False, "shadow_mode": True}
+    roles = {}
+    for name, role_model in config.roles().items():
+        roles[name] = {
+            "model": role_model.model,
+            "provider": role_model.provider,
+            "temperature": role_model.temperature,
+            "max_tokens": role_model.max_tokens,
+            "reasoning_effort": role_model.reasoning_effort,
+        }
+    return {
+        "enabled": config.enabled,
+        "shadow_mode": config.shadow_mode,
+        "may_influence_paper_decisions": config.may_influence_paper_decisions,
+        "roles": roles,
+    }
+
+
+def build_risk_gates() -> dict:
+    """Expose the deterministic gates the LLM proposal must satisfy.
+
+    Built from the same policy constant the live pipeline uses
+    (`LIVE_MAX_EXPOSURE_PCT`), not from the RiskManager class default, so the
+    console can never advertise a limit the runtime does not enforce.
+    """
+    manager = RiskManager(max_exposure=LIVE_MAX_EXPOSURE_PCT)
+    return {
+        "minimum_conviction_pct": manager.MINIMUM_CONVICTION,
+        "no_news_minimum_conviction_pct": manager.NO_NEWS_MINIMUM_CONVICTION,
+        "minimum_hybrid_confidence_pct": round(manager.MINIMUM_HYBRID_CONFIDENCE * 100, 4),
+        "max_daily_drawdown_pct": manager.max_daily_drawdown,
+        "max_exposure_pct": manager.max_exposure,
+        "cooldown_minutes": manager.cooldown_minutes,
+    }
 
 
 def get_external_rag_health() -> dict:
@@ -192,6 +269,9 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
         "database": {"backend": "PostgreSQL", "label": database.get_database_label()},
         "clock": clock,
         "workers": workers,
+        "execution_config": build_execution_config_safe(),
+        "model_roles": build_model_roles(),
+        "risk_gates": build_risk_gates(),
         "latest_kline": {
             "timestamp": int(latest_kline.timestamp) if latest_kline else None,
             "age_seconds": now - int(latest_kline.timestamp) if latest_kline else None,

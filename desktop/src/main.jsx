@@ -6,6 +6,14 @@ import {
   ShieldCheck, SlidersHorizontal, TerminalSquare, UsersRound
 } from "lucide-react";
 import { evaluationsToCsv } from "./csv.mjs";
+import {
+  convictionOutlook,
+  costHurdles,
+  describeModelRoles,
+  formatPercent,
+  hurdleCoverage,
+  summarizeDecisions
+} from "./cost.mjs";
 import "./styles.css";
 
 const previewState = {
@@ -91,6 +99,72 @@ function HorizonCell({ result, blocked }) {
   if (result.status === "data_gap") return <span className="future gap">DATA GAP</span>;
   const tone = result.status === "good" ? "hit" : result.status === "bad" ? "miss" : "open";
   return <span className={`future ${tone}`}>{result.status.toUpperCase()} {result.move_pct > 0 ? "+" : ""}{result.move_pct}%</span>;
+}
+
+function CostRealityPanel({ state, logs }) {
+  const hurdles = costHurdles(state.execution_config);
+  const summary = summarizeDecisions(logs);
+  const roles = describeModelRoles(state.model_roles);
+  const gates = state.risk_gates || {};
+  const latest = state.logs?.[0] || {};
+  // The no-news gate applies when the snapshot carried no news context at all.
+  const newsAvailable = !latest.snapshot?.data_health?.is_news_stale;
+  const outlook = convictionOutlook(gates, newsAvailable);
+  const coverage = hurdleCoverage(0.47, hurdles.buyPct);
+
+  return <section className="panel cost-panel" id="cost-reality">
+    <div className="panel-heading">
+      <h2><Gauge size={15} />Cost Reality</h2>
+      <span>{hurdles.buyPct == null ? "custo desconhecido" : `BUY ${formatPercent(hurdles.buyPct)} round-trip`}</span>
+    </div>
+
+    <div className="cost-grid">
+      <div className="cost-block">
+        <small>Custo configurado por lado</small>
+        <strong>{formatPercent(hurdles.oneSidePct)}</strong>
+        <p>BUY round-trip <b>{formatPercent(hurdles.buyPct)}</b> · SELL exit <b>{formatPercent(hurdles.sellPct)}</b></p>
+        <em>fee {formatPercent((state.execution_config?.fee_rate || 0) * 100, 3)} + slippage min {formatPercent((state.execution_config?.min_slippage_rate || 0) * 100, 3)}</em>
+      </div>
+
+      <div className="cost-block">
+        <small>Movimento tipico 60m vs custo BUY</small>
+        <strong className={coverage.covered === false ? "bad" : "good"}>
+          {coverage.ratio == null ? "--" : `${coverage.ratio.toFixed(2)}x`}
+        </strong>
+        <p>0.47% tipico / {formatPercent(hurdles.buyPct)} de custo</p>
+        <em>{coverage.covered === false ? "o movimento tipico nao cobre o custo" : "cobre o custo"}</em>
+      </div>
+
+      <div className="cost-block">
+        <small>Conviccao minima para executar</small>
+        <strong>{outlook.required == null ? "--" : `${outlook.required}%`}</strong>
+        <p>{outlook.source === "no_news" ? "sem noticias frescas" : "gate padrao do Risk Manager"}</p>
+        <em>hibrida minima {gates.minimum_hybrid_confidence_pct ?? "--"}% · drawdown {formatPercent(gates.max_daily_drawdown_pct)}</em>
+      </div>
+
+      <div className="cost-block">
+        <small>Decisoes auditadas (amostra)</small>
+        <strong>{summary.approved} / {summary.total}</strong>
+        <p>aprovadas · <b className="warn">{summary.blocked}</b> bloqueadas · {summary.hold} HOLD</p>
+        <em>de {summary.total} ciclos no log carregado</em>
+      </div>
+    </div>
+
+    <div className="cost-detail">
+      <div>
+        <small>Motivos de bloqueio</small>
+        {summary.reasons.length
+          ? <ul>{summary.reasons.slice(0, 4).map(item => <li key={item.reason}><b>{item.count}x</b> {item.reason}</li>)}</ul>
+          : <p className="muted">Nenhum bloqueio no log carregado.</p>}
+      </div>
+      <div>
+        <small>Modelos por papel</small>
+        {roles.length
+          ? <ul>{roles.map(item => <li key={item.role}><b>{item.role}</b> {item.model} <em>{item.provider} · {item.max_tokens} tok · effort {item.reasoning_effort}</em></li>)}</ul>
+          : <p className="muted">{state.model_roles?.error || "Config de modelos indisponivel."}</p>}
+      </div>
+    </div>
+  </section>;
 }
 
 function App() {
@@ -311,6 +385,8 @@ function App() {
         </table>
         <footer><span>Showing {filteredEntries.length} evaluated decisions</span><span className="legend"><b className="hit">HIT</b><b className="open">OPEN</b><b className="gap">DATA GAP</b><b className="cooldown">COOLDOWN</b></span></footer>
       </section>
+
+      <CostRealityPanel state={state} logs={state.logs || []} />
 
       <section className="ops-footer" id="settings">
         <label>Reports since ID <input value={sinceId} onChange={event => setSinceId(event.target.value.replace(/\D/g, ""))} /></label>

@@ -21,6 +21,33 @@ const smokeState = {
   clock: { status: "OK", skew_seconds: 0.1 },
   portfolio: { equity_brl: 9850, exposure_pct: 5, daily_reference_equity_brl: 10000, daily_drawdown_pct: 1.5, daily_drawdown_limit_pct: 10 },
   position: { quantity: 0.001, avg_cost_brl: 390000, reconciliation: { method: "smoke" } },
+  execution_config: {
+    fee_rate: 0.003,
+    min_slippage_rate: 0.0005,
+    max_slippage_rate: 0.003,
+    atr_slippage_factor: 0.1,
+    one_side_cost_pct: 0.35,
+    buy_round_trip_cost_pct: 0.7,
+    sell_exit_cost_pct: 0.35
+  },
+  model_roles: {
+    enabled: false,
+    shadow_mode: true,
+    may_influence_paper_decisions: false,
+    roles: {
+      news: { model: "glm-5.3:cloud", provider: "ollama", temperature: 0, max_tokens: 5000, reasoning_effort: "low" },
+      technical: { model: "glm-5.3:cloud", provider: "ollama", temperature: 0, max_tokens: 5000, reasoning_effort: "low" },
+      decision: { model: "kimi-k2.7-code:cloud", provider: "ollama", temperature: 0, max_tokens: 8000, reasoning_effort: null }
+    }
+  },
+  risk_gates: {
+    minimum_conviction_pct: 70,
+    no_news_minimum_conviction_pct: 80,
+    minimum_hybrid_confidence_pct: 50,
+    max_daily_drawdown_pct: 10,
+    max_exposure_pct: 100,
+    cooldown_minutes: 15
+  },
   rag: { documents: 1, chunks: 2 },
   external_rag: { status: "ready", dense_indexed: 2, lexical_indexed: 2 },
   logs: [{
@@ -33,6 +60,15 @@ const smokeState = {
     final_confidence: 0.6,
     execution_price: 400000,
     reasoning: "Smoke HOLD",
+    snapshot: { technical: {}, data_health: {}, news_risk: { risk_level: "NORMAL" } }
+  }, {
+    id: 2,
+    timestamp: 1779999970,
+    llm_action: "BUY",
+    action: "HOLD",
+    llm_conviction: 60,
+    execution_price: 400000,
+    reasoning: "Conviccao bruta da IA insuficiente (60%). Exige-se minimo de 70%.",
     snapshot: { technical: {}, data_health: {}, news_risk: { risk_level: "NORMAL" } }
   }],
   entry_evaluation: {
@@ -111,6 +147,22 @@ async function runSmokeTest() {
     document.querySelector('[data-interval="60"]').click();
     await wait(10);
     readPaperAction();
+
+    // Cost Reality panel: assert it rendered the configured cost, the model
+    // roles and the blocked-decision reasons, not just that the section exists.
+    const costPanel = document.querySelector('#cost-reality');
+    if (!costPanel) throw new Error('missing cost reality panel');
+    const costText = costPanel.textContent;
+    const costBlocks = costPanel.querySelectorAll('.cost-block').length;
+    const costDetailItems = costPanel.querySelectorAll('.cost-detail li').length;
+    const hasBuyHurdle = costText.includes('0.70%');
+    const hasPerSideCost = costText.includes('0.35%');
+    // Read the conviction block specifically. A whole-panel substring check for
+    // '70%' would also match the '0.70%' BUY hurdle and prove nothing.
+    const costStrongValues = [...costPanel.querySelectorAll('.cost-block strong')].map(node => node.textContent.trim());
+    const hasConvictionGate = costStrongValues.includes('70%');
+    const hasDecisionModel = costText.includes('kimi-k2.7-code:cloud');
+
     return {
       navButtons: document.querySelectorAll('nav button').length,
       actionButtons: document.querySelectorAll('.ops-footer button').length,
@@ -124,6 +176,12 @@ async function runSmokeTest() {
       actionCoverage: [...new Set([
         ...document.querySelectorAll('[data-action]')
       ].map(node => node.dataset.action).concat([...availablePaperActions]))].sort(),
+      costBlocks,
+      costDetailItems,
+      hasBuyHurdle,
+      hasPerSideCost,
+      hasConvictionGate,
+      hasDecisionModel,
       previewBannerVisible: Boolean(document.querySelector('.preview-banner')),
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: document.documentElement.clientWidth
@@ -133,6 +191,18 @@ async function runSmokeTest() {
   const image = await window.webContents.capturePage();
   fs.mkdirSync(path.dirname(SCREENSHOT_PATH), { recursive: true });
   fs.writeFileSync(SCREENSHOT_PATH, image.toPNG());
+
+  // Capture a second artifact showing the Cost Reality panel, which sits below
+  // the fold at the default viewport. Scrolling the .main-area container is not
+  // reliable under offscreen rendering, so grow the window instead and let the
+  // whole page render, then restore the original size.
+  const COST_SCREENSHOT_PATH = path.join(PROJECT_DIR, "backend", "reports", "electron-cost-panel.png");
+  window.setContentSize(1080, 1900);
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const costImage = await window.webContents.capturePage();
+  fs.writeFileSync(COST_SCREENSHOT_PATH, costImage.toPNG());
+  window.setContentSize(1080, 760);
+  await new Promise(resolve => setTimeout(resolve, 200));
 
   const failures = [];
   if (result.navButtons !== 6) failures.push(`navButtons=${result.navButtons}`);
@@ -149,11 +219,17 @@ async function runSmokeTest() {
   const expectedPaperActions = ["experiment100_30", "paper10", "paper100", "paper30", "paper30_60"];
   if (JSON.stringify(result.availablePaperActions) !== JSON.stringify(expectedPaperActions)) failures.push(`paper action mapping=${result.availablePaperActions}`);
   if (result.previewBannerVisible) failures.push("browser preview banner visible in Electron");
+  if (result.costBlocks !== 4) failures.push(`costBlocks=${result.costBlocks}`);
+  if (result.costDetailItems < 2) failures.push(`costDetailItems=${result.costDetailItems}`);
+  if (!result.hasBuyHurdle) failures.push("cost panel did not show the BUY round-trip hurdle");
+  if (!result.hasPerSideCost) failures.push("cost panel did not show the per-side cost");
+  if (!result.hasConvictionGate) failures.push("cost panel did not show the conviction gate");
+  if (!result.hasDecisionModel) failures.push("cost panel did not show the decision model");
   if (result.documentWidth > result.viewportWidth + 2) failures.push(`horizontal overflow ${result.documentWidth}/${result.viewportWidth}`);
   if (!invokedActions.includes("diagnostics")) failures.push("diagnostics IPC was not invoked");
   if (rendererErrors.length) failures.push(`renderer errors: ${rendererErrors.join(" | ")}`);
 
-  console.log(JSON.stringify({ ...result, invokedActions, rendererErrors, screenshot: SCREENSHOT_PATH }, null, 2));
+  console.log(JSON.stringify({ ...result, invokedActions, rendererErrors, screenshot: SCREENSHOT_PATH, costScreenshot: COST_SCREENSHOT_PATH }, null, 2));
   window.destroy();
   if (failures.length) throw new Error(failures.join("; "));
 }

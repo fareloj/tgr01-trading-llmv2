@@ -5,6 +5,17 @@ import time
 
 
 class RiskManager:
+    # Conviction the model must reach for a directional proposal to be
+    # executable. Named because the LLM prompt is calibrated against it (see
+    # decision_agent.evaluate_market) and the operator console displays it; the
+    # three must not drift apart.
+    MINIMUM_CONVICTION = 70
+    # When no news context is present, the bar is higher: the model must be more
+    # certain to act without news corroboration.
+    NO_NEWS_MINIMUM_CONVICTION = 80
+    # Hybrid confidence floor: (conviction / 100) * system_reliability.
+    MINIMUM_HYBRID_CONFIDENCE = 0.50
+
     def __init__(
         self,
         max_daily_drawdown: float = 10.0,
@@ -145,28 +156,37 @@ class RiskManager:
         if cooldown_block:
             return cooldown_block
 
-        if conviction < 70:
+        if conviction < self.MINIMUM_CONVICTION:
             return {
                 "action": "HOLD",
-                "reason": f"Conviccao bruta da IA insuficiente ({conviction:g}%). Exige-se minimo de 70%.",
+                "reason": (
+                    f"Conviccao bruta da IA insuficiente ({conviction:g}%). "
+                    f"Exige-se minimo de {self.MINIMUM_CONVICTION}%."
+                ),
                 "executed_size": 0.0,
             }
 
         news = payload.get("news_context", [])
-        if len(news) == 0 and conviction < 80:
+        if len(news) == 0 and conviction < self.NO_NEWS_MINIMUM_CONVICTION:
             return {
                 "action": "HOLD",
-                "reason": f"Noticias velhas/ausentes. IA nao tem conviccao absoluta ({conviction:g}% < 80%).",
+                "reason": (
+                    f"Noticias velhas/ausentes. IA nao tem conviccao absoluta "
+                    f"({conviction:g}% < {self.NO_NEWS_MINIMUM_CONVICTION}%)."
+                ),
                 "executed_size": 0.0,
             }
 
         sys_rel = self.calculate_system_reliability(payload, action=action)
         hybrid_confidence = (conviction / 100.0) * sys_rel
 
-        if hybrid_confidence < 0.50:
+        if hybrid_confidence < self.MINIMUM_HYBRID_CONFIDENCE:
             return {
                 "action": "HOLD",
-                "reason": f"Confianca Hibrida muito baixa ({hybrid_confidence * 100:.1f}%). Limiar e 50%.",
+                "reason": (
+                    f"Confianca Hibrida muito baixa ({hybrid_confidence * 100:.1f}%). "
+                    f"Limiar e {self.MINIMUM_HYBRID_CONFIDENCE * 100:.0f}%."
+                ),
                 "executed_size": 0.0,
             }
 

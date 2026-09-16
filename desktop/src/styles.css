@@ -27,3 +27,21 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; } th { color: #
 section[id], article[id], header[id], button[id="rag-memory"] { scroll-margin-top: 8px; }
 @media (max-width: 1420px) { .console-shell { grid-template-columns: 190px 1fr; }.top-status { min-width: 138px; padding: 10px; }.primary-grid { grid-template-columns: 1fr 1.1fr; }.control-row { gap: 6px; }.control-row button { padding: 6px 8px; } }
 @media (max-width: 1180px) { .console-shell { grid-template-columns: 170px minmax(0, 1fr); }.metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }.primary-grid { grid-template-columns: 1fr; }.infra-bar { overflow-x: auto; }.control-row { flex-wrap: wrap; }.eval-panel { overflow-x: auto; }.ops-footer { align-items: flex-start; flex-direction: column; } }
+
+.cost-panel { margin-top: 8px; }
+.cost-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.cost-block { min-height: 96px; padding: 10px; border-right: 1px solid #26343d; border-bottom: 1px solid #26343d; }
+.cost-block small { color: #a0adb6; font-size: 10px; }
+.cost-block strong { display: block; margin-top: 8px; color: #edf4f7; font-size: 19px; }
+.cost-block p { margin: 6px 0 0; color: #cbd6dc; font-size: 11px; overflow-wrap: anywhere; }
+.cost-block em { display: block; margin-top: 6px; color: #93a1aa; font-size: 10px; font-style: normal; overflow-wrap: anywhere; }
+.cost-detail { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+.cost-detail > div { min-height: 84px; padding: 10px; border-right: 1px solid #26343d; }
+.cost-detail small { color: #8fb2c3; font-size: 10px; }
+.cost-detail ul { margin: 7px 0 0; padding-left: 0; list-style: none; }
+.cost-detail li { margin: 0 0 5px; color: #c9d6dd; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.cost-detail li b { color: #f4c62f; margin-right: 5px; }
+.cost-detail li em { color: #93a1aa; font-style: normal; }
+.cost-detail .muted { margin: 7px 0 0; color: #93a1aa; font-size: 11px; }
+@media (max-width: 1420px) { .cost-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1180px) { .cost-grid { grid-template-columns: 1fr; } .cost-detail { grid-template-columns: 1fr; } }

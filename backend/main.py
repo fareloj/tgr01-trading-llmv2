@@ -13,6 +13,7 @@ from backend.agents.decision_agent import DecisionAgent, has_llm_api_key
 from backend.core.audit import serialize_payload_snapshot
 from backend.core.database import get_db_path, init_db, print_db_diagnostics
 from backend.core import database, repository
+from backend.core.market_policy import LIVE_MAX_EXPOSURE_PCT
 from backend.core.runtime_safety import assess_worker_heartbeats
 from backend.core.trading_run_audit import TradingRunAudit
 from backend.execution.paper_simulator import PaperExecutionConfig, empty_execution_audit, execute_paper_order
@@ -123,7 +124,7 @@ def _run_trading_cycle(run_audit: TradingRunAudit):
         print("=" * 60 + "\n")
         return False
 
-    rm = RiskManager(max_exposure=80.0)
+    rm = RiskManager(max_exposure=LIVE_MAX_EXPOSURE_PCT)
     try:
         enrich_payload_with_daily_equity(payload, max_daily_drawdown=rm.max_daily_drawdown)
     except (RuntimeError, ValueError) as error:
