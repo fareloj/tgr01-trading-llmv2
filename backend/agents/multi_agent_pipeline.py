@@ -112,10 +112,37 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 @dataclass(frozen=True)
 class AgentCall:
+    """One validated role call plus the non-secret metadata needed to audit it.
+
+    Without `finish_reason`, token usage and the effective request settings, a
+    fail-closed HOLD caused by token exhaustion is indistinguishable from an
+    ordinary malformed response.
+    """
+
     role: str
     model: str
     latency_ms: float
     output: BaseModel
+    provider: str = ""
+    response_format: str = ""
+    finish_reason: str | None = None
+    completion_tokens: int | None = None
+    max_tokens: int | None = None
+    reasoning_effort: str | None = None
+
+    def diagnostics(self) -> dict:
+        """Compact, non-secret summary for reports and campaign records."""
+        return {
+            "role": self.role,
+            "model": self.model,
+            "provider": self.provider,
+            "latency_ms": self.latency_ms,
+            "response_format": self.response_format,
+            "finish_reason": self.finish_reason,
+            "completion_tokens": self.completion_tokens,
+            "max_tokens": self.max_tokens,
+            "reasoning_effort": self.reasoning_effort,
+        }
 
 
 @dataclass(frozen=True)
@@ -123,15 +150,6 @@ class MultiAgentPipelineResult:
     news: AgentCall
     technical: AgentCall
     decision: AgentCall
-
-
-_JSON_SCHEMA_UNSUPPORTED_MARKERS = (
-    "response_format",
-    "json_schema",
-    "unavailable now",
-    "not supported",
-    "unsupported",
-)
 
 
 class StructuredAgentClient:
@@ -148,15 +166,20 @@ class StructuredAgentClient:
 
     def __init__(self, config: MultiAgentModelConfig | None = None):
         self.config = config or resolve_multi_agent_model_config()
-        self._clients: dict[str, OpenAI] = {}
+        self._clients: dict[tuple[str, str], OpenAI] = {}
         self._response_format_override: dict[str, dict] = {}
         self._last_response_format: dict[str, str] = {}
 
     def _client_for(self, role_model) -> OpenAI:
-        """Build and cache one OpenAI-compatible client per provider."""
+        """Build and cache one client per (provider, endpoint) pair.
+
+        Caching on provider alone would let two roles that share a provider but
+        use different endpoints silently reuse the first endpoint.
+        """
         provider = role_model.provider
-        if provider in self._clients:
-            return self._clients[provider]
+        cache_key = (provider, role_model.base_url.rstrip("/"))
+        if cache_key in self._clients:
+            return self._clients[cache_key]
 
         keys = load_provider_api_keys(provider)
         if not keys:
@@ -170,14 +193,14 @@ class StructuredAgentClient:
             headers[role_model.session_header] = os.getenv(
                 "OPENCODE_GO_SESSION_ID", "tgr01-paper-multi-agent"
             )
-        self._clients[provider] = OpenAI(
+        self._clients[cache_key] = OpenAI(
             api_key=keys[0],
             base_url=role_model.base_url,
             timeout=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
             max_retries=0,
             default_headers=headers or None,
         )
-        return self._clients[provider]
+        return self._clients[cache_key]
 
     @staticmethod
     def _request_limits(role_model) -> dict:
@@ -229,12 +252,22 @@ class StructuredAgentClient:
 
     @classmethod
     def _is_json_schema_rejection(cls, error: Exception) -> bool:
-        """Distinguish 'this provider will not do json_schema' from other errors."""
+        """Distinguish 'this provider will not do json_schema' from other errors.
+
+        Requires both a response-format mention and an unsupported-format phrase,
+        so an unrelated 400 ("invalid temperature", "unknown field") is never
+        silently downgraded to json_object.
+        """
         status = getattr(error, "status_code", None)
         if status not in (400, 404, 422):
             return False
         message = str(error).lower()
-        return any(marker in message for marker in _JSON_SCHEMA_UNSUPPORTED_MARKERS)
+        mentions_format = "response_format" in message or "json_schema" in message
+        says_unsupported = any(
+            marker in message
+            for marker in ("unavailable now", "not supported", "unsupported", "not available")
+        )
+        return mentions_format and says_unsupported
 
     def call(
         self,
@@ -253,8 +286,14 @@ class StructuredAgentClient:
         messages = self._build_messages(role, system_prompt, payload, schema)
         limits = self._request_limits(role_model)
 
-        response_format = self._response_format_override.get(role) or self._json_schema_format(role, schema)
+        # The override is keyed by role AND model, so a model swap re-probes the
+        # strict contract rather than inheriting another model's downgrade.
+        override_key = f"{role}:{resolved_model}"
+        response_format = self._response_format_override.get(
+            override_key
+        ) or self._json_schema_format(role, schema)
         started = time.perf_counter()
+        used_fallback = False
         try:
             response = client.chat.completions.create(
                 model=resolved_model,
@@ -267,8 +306,7 @@ class StructuredAgentClient:
             # One retry only, and only for an explicit response_format refusal.
             if not self._is_json_schema_rejection(error):
                 raise
-            self._response_format_override[role] = {"type": "json_object"}
-            self._last_response_format[role] = "json_object_fallback"
+            used_fallback = True
             response = client.chat.completions.create(
                 model=resolved_model,
                 messages=messages,
@@ -276,22 +314,40 @@ class StructuredAgentClient:
                 temperature=role_model.temperature,
                 **limits,
             )
-        else:
-            self._last_response_format[role] = response_format["type"]
 
         latency_ms = (time.perf_counter() - started) * 1000
         content = unwrap_single_json_fence(response.choices[0].message.content or "")
         try:
             decoded = json.loads(content)
-            output = schema.model_validate(decoded)
+            # strict=True keeps the post-fallback path as strong as the provider
+            # enforced json_schema one: no silent string->int coercion.
+            output = schema.model_validate(decoded, strict=True)
         except Exception as error:
             preview = content[:600].replace("\n", "\\n")
             raise ValueError(f"invalid {role} JSON output: {type(error).__name__}; preview={preview!r}") from error
+
+        # Only remember the downgrade after it actually produced valid output, so
+        # a failed retry cannot poison every later call for this role.
+        if used_fallback:
+            self._response_format_override[override_key] = {"type": "json_object"}
+            effective_format = "json_object_fallback"
+        else:
+            effective_format = response_format["type"]
+        self._last_response_format[role] = effective_format
+
+        usage = getattr(response, "usage", None)
+        choice = response.choices[0]
         return AgentCall(
             role=role,
             model=resolved_model,
             latency_ms=round(latency_ms, 3),
             output=output,
+            provider=role_model.provider,
+            response_format=effective_format,
+            finish_reason=getattr(choice, "finish_reason", None),
+            completion_tokens=getattr(usage, "completion_tokens", None) if usage else None,
+            max_tokens=role_model.max_tokens,
+            reasoning_effort=getattr(role_model, "reasoning_effort", None),
         )
 
     def response_format_for(self, role: str) -> str | None:

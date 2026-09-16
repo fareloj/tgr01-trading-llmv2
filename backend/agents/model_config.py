@@ -37,6 +37,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 DEFAULT_LLM_BASE_URL = "http://localhost:11434/v1"
 OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1"
@@ -93,7 +94,10 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
     "ollama-cloud": ProviderSpec(
         name="ollama-cloud",
         base_url=OLLAMA_CLOUD_BASE_URL,
-        api_key_envs=("OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY", "LLM_API_KEY"),
+        # Deliberately no LLM_API_KEY fallback: that variable holds the local
+        # daemon credential, and reusing it here would send one provider's
+        # secret to a different host.
+        api_key_envs=("OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY"),
     ),
     "opencode-go": ProviderSpec(
         name="opencode-go",
@@ -101,6 +105,17 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         api_key_envs=("OPENCODE_GO_API_KEY",),
         session_header=OPENCODE_GO_SESSION_HEADER,
     ),
+}
+
+# Models sanctioned per provider. A role may not resolve a model outside this
+# list, so a typo cannot spend quota on an expensive or unsanctioned model.
+PROVIDER_MODEL_ALLOWLIST: dict[str, tuple[str, ...]] = {
+    # The local daemon proxies any Ollama Cloud tag, so no restriction here.
+    "ollama": (),
+    "ollama-cloud": (),
+    # OpenCode Go is a paid subscription with per-model monthly caps. Only the
+    # Qwen 3.7/3.8 family is sanctioned for this project.
+    "opencode-go": ("qwen3.7", "qwen3.8"),
 }
 
 
@@ -151,6 +166,49 @@ def resolve_provider(name: str) -> ProviderSpec:
             f"{', '.join(_KNOWN_PROVIDERS)}"
         )
     return PROVIDER_REGISTRY[normalized]
+
+
+def _endpoint_host(url: str) -> str:
+    return urlparse(url).hostname or ""
+
+
+def resolve_allowed_base_url(provider: str, override: str) -> str:
+    """Bind a base URL override to its provider's own host.
+
+    A role supplies `<ROLE>_PROVIDER` for the credential and `<ROLE>_BASE_URL` for
+    the endpoint. Without this check a typo in the URL would send one provider's
+    API key, and its session header, to an arbitrary host. An override is only
+    accepted when it stays on the registered host for that provider; otherwise the
+    resolution fails closed instead of leaking the credential.
+    """
+    spec = resolve_provider(provider)
+    candidate = (override or "").strip()
+    if not candidate:
+        return spec.base_url
+
+    if not candidate.startswith(("http://", "https://")):
+        raise ValueError(f"base URL for provider {provider!r} must be an http(s) URL")
+
+    if _endpoint_host(candidate) != _endpoint_host(spec.base_url):
+        raise ValueError(
+            f"base URL host {_endpoint_host(candidate)!r} does not match provider "
+            f"{provider!r} host {_endpoint_host(spec.base_url)!r}; refusing to send "
+            f"this provider's credential to a different endpoint"
+        )
+    return candidate
+
+
+def _check_model_sanctioned(role: str, provider: str, model: str) -> None:
+    """Refuse a model outside the provider's sanctioned list."""
+    allowed = PROVIDER_MODEL_ALLOWLIST.get(provider, ())
+    if not allowed:
+        return
+    if any(model.startswith(prefix) for prefix in allowed):
+        return
+    raise ValueError(
+        f"{role.upper()}_MODEL {model!r} is not sanctioned for provider "
+        f"{provider!r}; allowed prefixes: {', '.join(allowed)}"
+    )
 
 
 def load_provider_api_keys(provider: str) -> list[str]:
@@ -244,7 +302,8 @@ def _resolve_role(
         }.get(base, DEFAULT_PROVIDER)
 
     spec = resolve_provider(provider)
-    base_url = _env_text(f"{upper}_BASE_URL", spec.base_url)
+    base_url = resolve_allowed_base_url(provider, _env_text(f"{upper}_BASE_URL", ""))
+    _check_model_sanctioned(role, spec.name, model)
     temperature = _env_float(f"{upper}_TEMPERATURE", DEFAULT_TEMPERATURE)
     max_tokens = _env_int(f"{upper}_MAX_TOKENS", default_max_tokens)
     reasoning_effort = _env_text(f"{upper}_REASONING_EFFORT", default_reasoning_effort or "").lower() or None

@@ -500,6 +500,11 @@ def test_live_and_ml_rsi_agree():
     `features/indicators.py:wilder_rsi` alimenta o LLM e o Risk Manager;
     `ml/dataset.py:_rsi` alimenta a feature `rsi_14` do dataset e o baseline
     `rsi_mean_reversion`. Se elas divergirem, backtest e live medem coisas diferentes.
+
+    NOTA: esta serie e sintetica de proposito. Ela prova que as duas funcoes
+    concordam matematicamente, o que e o que este teste pode garantir sem banco.
+    A comparacao sobre candles REAIS fica em `audit_rsi_definition.py`, que exige
+    PostgreSQL e reporta tambem a divergencia de classificacao contra a SMA antiga.
     """
     closes = pd.Series([100.0 + (i % 11) * 1.3 - (i % 5) * 0.7 for i in range(120)])
     live = wilder_rsi(closes)

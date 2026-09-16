@@ -144,11 +144,21 @@ def call_with_retry(client, *, retries: int, **kwargs):
 
 
 def call_record(call) -> dict:
-    return {
+    """Persist the validated output plus non-secret call diagnostics.
+
+    The diagnostics make a fail-closed HOLD explainable: finish_reason=length
+    with completion_tokens equal to max_tokens identifies token exhaustion, while
+    a malformed response usually shows finish_reason=stop.
+    """
+    record = {
         "model": call.model,
         "latency_ms": call.latency_ms,
         "output": call.output.model_dump(),
     }
+    diagnostics = getattr(call, "diagnostics", None)
+    if callable(diagnostics):
+        record.update({key: value for key, value in diagnostics().items() if key not in record})
+    return record
 
 
 def sample_completed(record: dict) -> bool:

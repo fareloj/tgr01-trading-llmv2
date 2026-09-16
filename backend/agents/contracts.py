@@ -45,7 +45,29 @@ class DecisionOutput(BaseModel):
 
 
 class StrictToolContract(BaseModel):
+    """Base for every multi-agent contract.
+
+    `extra="forbid"` rejects unknown fields. The numeric guards below reject the
+    coercions Pydantic would otherwise accept silently: `conviction: true` became
+    `1`, `conviction: "70"` became `70`, and a fractional value truncated. The
+    live `DecisionOutput` already refused booleans and non-finite floats; these
+    contracts are held to the same standard so a malformed model response cannot
+    be normalized into a plausible-looking decision.
+    """
+
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator(
+        "conviction",
+        "confidence",
+        mode="before",
+        check_fields=False,
+    )
+    @classmethod
+    def reject_boolean_confidence(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("conviction/confidence must be numeric, not boolean")
+        return value
 
 
 class MultiTimeframeTrendRequest(StrictToolContract):
