@@ -175,10 +175,21 @@ class StructuredAgentClient:
     def _client_for(self, role_model) -> OpenAI:
         """Build and cache one client per (provider, endpoint) pair.
 
-        Caching on provider alone would let two roles that share a provider but
-        use different endpoints silently reuse the first endpoint.
+        This is the credential sink, so it revalidates the provider, endpoint and
+        model before loading any key. Caching on provider alone would let two roles
+        that share a provider but use different endpoints silently reuse the first
+        endpoint.
         """
         provider = role_model.provider
+        # Validate before touching credentials: a forged RoleModel must not be able
+        # to send a key to an unregistered endpoint.
+        assert_role_request_allowed(
+            role=role_model.role,
+            provider=provider,
+            model=role_model.model,
+            base_url=role_model.base_url,
+        )
+
         cache_key = (provider, role_model.base_url.rstrip("/"))
         if cache_key in self._clients:
             return self._clients[cache_key]
@@ -190,9 +201,13 @@ class StructuredAgentClient:
                 f"one of {', '.join(resolve_provider(provider).api_key_envs)}"
             )
 
+        # The header is derived from the registered provider, never from the
+        # caller-supplied RoleModel, so a role cannot inject another provider's
+        # session header into this endpoint.
+        session_header = resolve_provider(provider).session_header
         headers = {}
-        if role_model.session_header:
-            headers[role_model.session_header] = os.getenv(
+        if session_header:
+            headers[session_header] = os.getenv(
                 "OPENCODE_GO_SESSION_ID", "tgr01-paper-multi-agent"
             )
         self._clients[cache_key] = OpenAI(
@@ -252,42 +267,56 @@ class StructuredAgentClient:
             },
         ]
 
-    # A refusal must tie the unsupported phrase to the format itself. The phrase
-    # has to be a nearby predicate of the format token, and the words between them
-    # must not name a different parameter. That rejects both
-    # "response_format=json_schema accepted; temperature is unsupported" (the
-    # semicolon breaks the gap) and "response_format valid model unavailable"
-    # (the gap names the model).
+    # A refusal must tie the unsupported phrase to the format itself. The match is
+    # accepted only when no other request parameter is named as the subject of the
+    # negative phrase. That rejects "response_format error: unsupported
+    # temperature value" (temperature is what is unsupported) and
+    # "response_format valid model unavailable" (the model is unavailable), while
+    # still accepting "This response_format type is unavailable now".
+    #
+    # The check is deliberately conservative: when the text is ambiguous it does
+    # not downgrade, so the call fails closed instead of weakening validation.
     _FORMAT_TOKEN = r"(?:response_format|json_schema)"
-    _NEGATIVE_PHRASE = r"(?P<neg>is\s+not\s+supported|are\s+not\s+supported|not\s+supported|is\s+unsupported|unsupported|is\s+unavailable|unavailable|not\s+available|is\s+not\s+available)"
+    _NEGATIVE_PHRASE = r"(?:is\s+not\s+supported|are\s+not\s+supported|not\s+supported|is\s+unsupported|unsupported|is\s+unavailable|unavailable|not\s+available|is\s+not\s+available)"
     _REFUSAL_PATTERNS = (
         re.compile(
-            _FORMAT_TOKEN + r"(?P<gap>[\s\w=:,'-]{0,20}?)" + _NEGATIVE_PHRASE,
+            _FORMAT_TOKEN + r"(?P<gap>[\s\w=:,'/-]{0,20}?)" + "(?P<neg>" + _NEGATIVE_PHRASE + ")",
             re.IGNORECASE,
         ),
         re.compile(
-            _NEGATIVE_PHRASE + r"(?P<gap>[\s\w=:,'-]{0,20}?)" + _FORMAT_TOKEN,
+            "(?P<neg>" + _NEGATIVE_PHRASE + r")" + r"(?P<gap>[\s\w=:,'/-]{0,20}?)" + _FORMAT_TOKEN,
             re.IGNORECASE,
         ),
     )
 
-    # Names of other request parameters. If one appears between the format token
-    # and the unsupported phrase, the format is not what was rejected.
+    # Names of other request parameters. If one of these is the subject of the
+    # negative phrase, the format is not what was rejected.
     _OTHER_CAUSE = re.compile(
+        r"(?:temperature|max_tokens|max_completion_tokens|top_p|"
+        r"frequency_penalty|presence_penalty|context_length|unknown\s+field)",
+        re.IGNORECASE,
+    )
+    # 'model' only counts as the subject when it appears BEFORE the negative
+    # phrase. After it, "supported by this model" is ordinary wording.
+    _SUBJECT_BEFORE = re.compile(
         r"(?:temperature|max_tokens|max_completion_tokens|model|top_p|"
         r"frequency_penalty|presence_penalty|context_length|unknown\s+field)",
         re.IGNORECASE,
     )
+
+    # A window after the negative phrase in which a named parameter would make it
+    # the subject of that phrase.
+    _SUBJECT_WINDOW = 18
 
     @classmethod
     def _is_json_schema_rejection(cls, error: Exception) -> bool:
         """Distinguish 'this provider will not do json_schema' from other errors.
 
         Prefers the structured error body when the provider names response_format
-        as the offending parameter. Otherwise the unsupported phrase must be a
-        predicate of the format token with no other parameter intervening. A
-        400/404 caused by anything else (invalid temperature, unknown model,
-        unknown field) is never silently downgraded.
+        as the offending parameter; a body naming a different parameter blocks the
+        downgrade. Otherwise the unsupported phrase must be a predicate of the
+        format token with no other parameter acting as its subject. A 400/404
+        caused by anything else is never downgraded.
         """
         status = getattr(error, "status_code", None)
         if status not in (400, 404, 422):
@@ -299,13 +328,18 @@ class StructuredAgentClient:
             param = str(payload.get("param") or "").lower()
             if param in {"response_format", "response_format.type", "json_schema"}:
                 return True
+            # The provider named a different parameter; trust it over the text.
+            if param:
+                return False
 
         message = str(error)
         for pattern in cls._REFUSAL_PATTERNS:
             for match in pattern.finditer(message):
                 gap = match.groupdict().get("gap") or ""
-                if not cls._OTHER_CAUSE.search(gap):
-                    return True
+                after = message[match.end("neg"): match.end("neg") + cls._SUBJECT_WINDOW]
+                if cls._SUBJECT_BEFORE.search(gap) or cls._OTHER_CAUSE.search(after):
+                    continue
+                return True
         return False
 
     # Numeric fields that JSON producers sometimes emit as 70.0 instead of 70.

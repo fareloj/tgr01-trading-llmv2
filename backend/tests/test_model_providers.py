@@ -330,6 +330,29 @@ class TestClientWiring:
         base.update(overrides)
         return RoleModel(**base)
 
+    def test_foreign_endpoint_is_rejected_by_the_credential_sink(self, monkeypatch):
+        """_client_for is the credential sink; it must validate before loading keys."""
+        monkeypatch.setenv("OPENCODE_GO_API_KEY", "secret-go-key")
+        client = StructuredAgentClient()
+        forged = self._role(base_url="https://evil.example/v1")
+
+        with pytest.raises(ValueError, match="different endpoint"):
+            client._client_for(forged)
+
+    def test_session_header_comes_from_the_registry_not_the_role(self, monkeypatch):
+        """A forged session_header on an ollama role must not be injected."""
+        monkeypatch.setenv("LLM_API_KEY", "ollama-key")
+        client = StructuredAgentClient()
+        forged = self._role(
+            provider="ollama",
+            base_url="http://localhost:11434/v1",
+            session_header=OPENCODE_GO_SESSION_HEADER,
+        )
+
+        built = client._client_for(forged)
+
+        assert OPENCODE_GO_SESSION_HEADER not in built.default_headers
+
     def test_missing_credential_fails_closed_with_a_clear_message(self):
         client = StructuredAgentClient()
 
@@ -374,7 +397,7 @@ class TestClientWiring:
         monkeypatch.setenv("LLM_API_KEY", "ollama-key")
         client = StructuredAgentClient()
         first = self._role(provider="ollama", base_url="http://localhost:11434/v1", session_header=None)
-        second = self._role(provider="ollama", base_url="http://127.0.0.1:11434/v1", session_header=None)
+        second = self._role(provider="ollama", base_url="http://localhost:11434/v1/extra", session_header=None)
 
         built_first = client._client_for(first)
         built_second = client._client_for(second)
@@ -625,6 +648,41 @@ class TestResponseFormatFallback:
                 body={"error": {"message": "bad parameter", "param": "temperature"}},
             )
         )
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # The format is mentioned, but another parameter is what is unsupported.
+            "response_format error: unsupported temperature value",
+            "response_format valid model unavailable",
+            "response_format=json_schema accepted; temperature is unsupported",
+        ],
+    )
+    def test_another_parameter_as_subject_does_not_downgrade(self, message):
+        class FakeError(Exception):
+            def __init__(self, text):
+                super().__init__(text)
+                self.status_code = 400
+                self.body = None
+
+        assert not StructuredAgentClient._is_json_schema_rejection(FakeError(message))
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "This response_format type is unavailable now",
+            "json_schema is not supported by this model",
+            "unsupported response_format type json_schema",
+        ],
+    )
+    def test_genuine_format_refusal_still_downgrades(self, message):
+        class FakeError(Exception):
+            def __init__(self, text):
+                super().__init__(text)
+                self.status_code = 400
+                self.body = None
+
+        assert StructuredAgentClient._is_json_schema_rejection(FakeError(message))
 
     def test_failed_fallback_does_not_poison_later_calls(self, monkeypatch):
         """The downgrade is remembered only after it produced valid output."""

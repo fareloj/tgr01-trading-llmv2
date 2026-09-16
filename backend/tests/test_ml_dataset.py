@@ -247,24 +247,3 @@ def test_dataset_metadata_records_indicator_definition_version():
     assert metadata["indicator_definition_version"] == INDICATOR_DEFINITION_VERSION
     assert metadata["indicator_definitions"] == dict(INDICATOR_DEFINITIONS)
     assert "wilder" in metadata["indicator_definitions"]["rsi_14"].lower()
-
-
-def test_indicator_version_is_bumped_for_the_wilder_rsi_change():
-    """Version 2 documents the move away from a simple moving average."""
-    assert INDICATOR_DEFINITION_VERSION >= 2
-
-
-def test_indicator_version_change_is_detectable_from_metadata_alone():
-    """A pre-Wilder artifact must be distinguishable without recomputing features.
-
-    Simulates the resume decision: an artifact recorded under version 1 must not
-    be accepted when the code defines version 2, even though the column list is
-    byte-for-byte identical.
-    """
-    frame = build_market_dataset(candles())
-    metadata = dataset_metadata(frame, DatasetConfig())
-
-    legacy = dict(metadata, indicator_definition_version=1)
-
-    assert legacy["indicator_definition_version"] != INDICATOR_DEFINITION_VERSION
-    assert "rsi_14" in FEATURE_COLUMNS

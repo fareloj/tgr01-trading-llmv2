@@ -38,6 +38,7 @@ from backend.evaluation.historical_campaign import (
 from backend.evaluation.historical_dataset import verify_manifest_contract
 from backend.execution.paper_simulator import PaperExecutionConfig, estimate_slippage_rate
 from backend.features.payload_builder import build_agent_payload
+from backend.ml.dataset import INDICATOR_DEFINITION_VERSION, INDICATOR_DEFINITIONS
 from backend.risk.risk_manager import RiskManager
 from backend.tests.compare_prompt_profiles import PROMPT_PROFILES, PromptProfileRunner
 from backend.tests.find_market_windows import fetch_candles, find_windows, parse_local_datetime
@@ -445,6 +446,12 @@ def main() -> int:
         "retry_wait_seconds": args.retry_wait_seconds,
         "dataset_id": dataset_manifest.get("dataset_id") if dataset_manifest else None,
         "dataset_partition": args.partition if dataset_manifest else None,
+        # Indicator semantics participate in the fingerprint, so a campaign started
+        # before an indicator change cannot resume with results produced after it.
+        # The RSI definition changed from an SMA to Wilder, which alters the
+        # technical context each sample is evaluated against.
+        "indicator_definition_version": INDICATOR_DEFINITION_VERSION,
+        "indicator_definitions": dict(INDICATOR_DEFINITIONS),
     }
     descriptors = variant_descriptors(args.variants)
     fingerprint = campaign_fingerprint(config, frozen, descriptors)
