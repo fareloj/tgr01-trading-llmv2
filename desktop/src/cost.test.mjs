@@ -160,6 +160,20 @@ test("convictionOutlook reports unknown rather than inventing a threshold", () =
   assert.deepEqual(convictionOutlook(gates, null), { required: null, source: "unknown" });
 });
 
+test("convictionOutlook does not show the lower bar when the raised gate is unknown", () => {
+  // Without news, the runtime demands more. If we only know the standard
+  // threshold, displaying it would understate the real gate.
+  assert.deepEqual(
+    convictionOutlook({ minimum_conviction_pct: 70 }, false),
+    { required: null, source: "unknown" }
+  );
+  // A no-news threshold that is not actually higher is not a raised gate.
+  assert.deepEqual(
+    convictionOutlook({ minimum_conviction_pct: 70, no_news_minimum_conviction_pct: 60 }, false),
+    { required: null, source: "unknown" }
+  );
+});
+
 test("describeModelRoles lists the three roles in order without credentials", () => {
   const described = describeModelRoles({
     roles: {

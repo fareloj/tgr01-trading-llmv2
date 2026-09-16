@@ -116,7 +116,11 @@ export function convictionOutlook(riskGates = {}, newsAvailable = true) {
   const noNews = toFiniteNumber(source.no_news_minimum_conviction_pct);
   if (base == null) return { required: null, source: "unknown" };
   if (newsAvailable == null) return { required: null, source: "unknown" };
-  if (!newsAvailable && noNews != null && noNews > base) {
+  if (!newsAvailable) {
+    // The runtime raises the floor when news is absent. Without the raised
+    // threshold we cannot know the real gate, and showing the lower one would
+    // understate it, so report unknown instead of guessing.
+    if (noNews == null || noNews <= base) return { required: null, source: "unknown" };
     return { required: noNews, source: "no_news" };
   }
   return { required: base, source: "standard" };

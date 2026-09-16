@@ -79,7 +79,8 @@ const smokeState = {
   }
 };
 
-ipcMain.handle("ops:state", async () => smokeState);
+let stateOverride = null;
+ipcMain.handle("ops:state", async () => stateOverride || smokeState);
 ipcMain.handle("ops:run", async (_event, action) => {
   invokedActions.push(action);
   return { started: true, action };
@@ -237,7 +238,30 @@ async function runSmokeTest() {
   if (!invokedActions.includes("diagnostics")) failures.push("diagnostics IPC was not invoked");
   if (rendererErrors.length) failures.push(`renderer errors: ${rendererErrors.join(" | ")}`);
 
-  console.log(JSON.stringify({ ...result, invokedActions, rendererErrors, screenshot: SCREENSHOT_PATH, costScreenshot: COST_SCREENSHOT_PATH }, null, 2));
+  // Second scenario: a malformed cost config must surface the error and must not
+  // render a fabricated 0.00% cost. Without this, deleting the error branch
+  // would still pass every assertion above.
+  stateOverride = { ...smokeState, execution_config: { error: "ValueError: PAPER_FEE_RATE must be numeric" } };
+  await window.webContents.reload();
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const malformed = await window.webContents.executeJavaScript(`(() => {
+    const panel = document.querySelector('#cost-reality');
+    if (!panel) return { error: 'missing panel' };
+    const strongValues = [...panel.querySelectorAll('.cost-block strong')].map(node => node.textContent.trim());
+    return {
+      hasErrorBanner: panel.querySelectorAll('.error-banner').length > 0,
+      bannerMentionsConfig: panel.textContent.includes('Configuracao de custo invalida'),
+      fabricatedZero: strongValues.includes('0.00%'),
+      costShowsUnknown: strongValues.includes('--')
+    };
+  })()`);
+  if (malformed.error) failures.push(`malformed config: ${malformed.error}`);
+  if (!malformed.hasErrorBanner) failures.push("malformed cost config did not show an error banner");
+  if (!malformed.bannerMentionsConfig) failures.push("malformed cost config banner did not name the problem");
+  if (malformed.fabricatedZero) failures.push("malformed cost config fabricated a 0.00% cost");
+  if (!malformed.costShowsUnknown) failures.push("malformed cost config did not render unknown cost");
+
+  console.log(JSON.stringify({ ...result, malformedConfig: malformed, invokedActions, rendererErrors, screenshot: SCREENSHOT_PATH, costScreenshot: COST_SCREENSHOT_PATH }, null, 2));
   window.destroy();
   if (failures.length) throw new Error(failures.join("; "));
 }
