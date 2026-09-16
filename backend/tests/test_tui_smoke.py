@@ -140,7 +140,11 @@ def test_tui_renders_nullable_recent_log_columns():
                     ],
                 }
             )
-            assert app.query_one("#recent", DataTable).row_count == 1
+            table = app.query_one("#recent", DataTable)
+            assert table.row_count == 1
+            # Assert the actual cells, not just that rendering did not raise.
+            cells = [str(table.get_row_at(0)[index]) for index in (3, 4, 5)]
+            assert cells == ["--", "--", "--"], cells
 
     asyncio.run(exercise())
 
