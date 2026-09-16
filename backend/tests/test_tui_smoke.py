@@ -109,6 +109,42 @@ def test_tui_renders_nullable_market_and_risk_fields():
     asyncio.run(exercise())
 
 
+def test_tui_renders_nullable_recent_log_columns():
+    """Audit columns are nullable in the database, so a partial row can be None.
+
+    llm_conviction, system_reliability and execution_price are all nullable in
+    db_models. Formatting a None with a numeric spec raises and would abort the
+    whole refresh.
+    """
+    async def exercise() -> None:
+        app = TuiHarness()
+        async with app.run_test(size=(190, 52)) as pilot:
+            await pilot.pause()
+            app.render_state(
+                {
+                    "db_path": "paper.db",
+                    "workers": {},
+                    "latest_kline": {"close": 400000.0, "age_seconds": 1},
+                    "clock": {"skew_seconds": 0, "status": "OK"},
+                    "portfolio": {"exposure_pct": 5.0, "equity_brl": 10000.0, "daily_drawdown_pct": 0.0},
+                    "rag": {"documents": 0, "chunks": 0},
+                    "logs": [
+                        {
+                            "id": 1,
+                            "llm_action": "SKIPPED",
+                            "action": "HOLD",
+                            "llm_conviction": None,
+                            "system_reliability": None,
+                            "execution_price": None,
+                        }
+                    ],
+                }
+            )
+            assert app.query_one("#recent", DataTable).row_count == 1
+
+    asyncio.run(exercise())
+
+
 def test_tui_still_renders_a_real_zero_close_and_exposure():
     """Zero is a legitimate value and must not be shown as unknown."""
     async def exercise() -> None:

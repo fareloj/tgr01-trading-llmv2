@@ -180,13 +180,19 @@ class TradingOpsTui(App):
         table = self.query_one("#recent", DataTable)
         table.clear()
         for log in state.get("logs", [])[:12]:
+            # These columns are nullable in the database, so a legacy or partial
+            # audit row can carry None. `.get(key, default)` does not help when
+            # the key exists with a None value.
+            conviction = log.get("llm_conviction")
+            reliability = log.get("system_reliability")
+            price = log.get("execution_price")
             table.add_row(
                 str(log.get("id", "")),
                 str(log.get("llm_action", "")),
                 str(log.get("action", "")),
-                f"{log.get('llm_conviction', 0):.0f}%",
-                f"{log.get('system_reliability', 0):.2f}",
-                f"R$ {log.get('execution_price', 0):,.0f}",
+                "--" if conviction is None else f"{conviction:.0f}%",
+                "--" if reliability is None else f"{reliability:.2f}",
+                "--" if price is None else f"R$ {price:,.0f}",
             )
 
     @work(exclusive=True, group="command")
