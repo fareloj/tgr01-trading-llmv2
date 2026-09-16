@@ -1,12 +1,17 @@
 import sys
+import numpy as np
 import pandas as pd
 from pathlib import Path
 
 # Adiciona a raiz do projeto no path
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-sys.path.append(str(BASE_DIR.parent))
+# BASE_DIR JA e a raiz do projeto (...\backend\tests -> ...\backend -> projeto).
+# Antes anexava BASE_DIR.parent (a raiz do drive), o que so funcionava por acidente
+# quando o pytest rodava da raiz e colocava o cwd no sys.path.
+sys.path.insert(0, str(BASE_DIR))
 
-from backend.features.indicators import calculate_technical_status
+from backend.features.indicators import calculate_technical_status, wilder_rsi
+from backend.ml.dataset import _rsi as ml_rsi
 
 def test_rsi_overbought():
     """Valida se uma tendência de alta artificial força o RSI acima de 70."""
@@ -303,6 +308,209 @@ def test_volatility_atr_structure():
     print("[PASS] Volatility ATR: Estrutura de dict (value, status) e regras de limiar validadas.")
 
 
+def _atr_referencia_pandas(df):
+    """A expressao pandas original, antes da otimizacao em numpy. Nao alterar."""
+    high_low = df["high"] - df["low"]
+    high_close = (df["high"] - df["close"].shift()).abs()
+    low_close = (df["low"] - df["close"].shift()).abs()
+    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return true_range.rolling(window=14, min_periods=1).mean()
+
+
+def _candles_sinteticos(n, seed=7, com_gap=False):
+    rng = np.random.default_rng(seed)
+    close = 100000 + np.cumsum(rng.normal(0, 40, n))
+    df = pd.DataFrame({
+        "timestamp": range(n),
+        "open": close,
+        "high": close + rng.uniform(1, 60, n),
+        "low": close - rng.uniform(1, 60, n),
+        "close": close,
+        "volume": rng.uniform(0.5, 2.0, n),
+    })
+    if com_gap:
+        df.loc[n // 2, "close"] = np.nan
+        df.loc[n // 3, "high"] = np.nan
+    return df
+
+
+def test_atr_numpy_matches_pandas():
+    """O ATR em numpy tem que dar EXATAMENTE o mesmo valor da expressao pandas.
+
+    A otimizacao trocou `pd.concat([...], axis=1).max(axis=1)` por `np.fmax`. A escolha
+    da funcao numpy importa: `np.maximum` (o que o PR #9 usava) PROPAGA NaN enquanto o
+    pandas IGNORA. Como a linha 0 tem NaN em `close.shift()`, `np.maximum` produziria
+    NaN onde o pandas produz numero -- e isso desloca a janela rolativa de 14 linhas.
+    O ATR alimenta o gate `EXTREME` do Risk Manager, entao a diferenca vira decisao.
+    """
+    for n in (50, 200):
+        for com_gap in (False, True):
+            df = _candles_sinteticos(n, com_gap=com_gap)
+            esperado = _atr_referencia_pandas(df)
+
+            calculate_technical_status(df)  # escreve df["ATR"] in-place
+            obtido = df["ATR"]
+
+            assert len(obtido) == len(esperado)
+            divergentes = (obtido - esperado).abs() > 1e-9
+            assert not divergentes.any(), (
+                f"n={n} gap={com_gap}: ATR divergiu em {int(divergentes.sum())} posicoes, "
+                f"primeira em {divergentes.idxmax()} "
+                f"(esperado {esperado[divergentes.idxmax()]}, veio {obtido[divergentes.idxmax()]})"
+            )
+
+    # A linha 0 e o caso que expoe np.maximum: NaN em close.shift().
+    df = _candles_sinteticos(50)
+    ref_row0 = float(_atr_referencia_pandas(df).iloc[0])
+    calculate_technical_status(df)
+    assert abs(float(df["ATR"].iloc[0]) - ref_row0) < 1e-9, (
+        f"linha 0: esperado {ref_row0}, veio {df['ATR'].iloc[0]} "
+        "(np.maximum deixaria NaN aqui e deslocaria a janela)"
+    )
+    print("[PASS] ATR: numpy == pandas, inclusive na linha 0 e com gap de NaN.")
+
+
+def _oracle_wilder_rsi(closes, period=14):
+    """RSI de Wilder (1978) em loop explicito, sem pandas -- o oraculo dos testes.
+
+    avg[period] = media dos primeiros `period` ganhos/perdas   (semente SMA)
+    avg[i]      = (avg[i-1]*(period-1) + x[i]) / period        (recursao)
+
+    Escrito a mao de proposito: se a versao vetorizada em pandas divergir disto,
+    o teste falha. Retorna None onde o RSI nao esta definido.
+    """
+    n = len(closes)
+    out = [None] * n
+    if n < period + 1:
+        return out
+
+    gains, losses = [], []
+    for i in range(1, n):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0.0))
+        losses.append(max(-d, 0.0))
+
+    def resolve(avg_g, avg_l):
+        if avg_l == 0:
+            return 100.0 if avg_g > 0 else 50.0
+        if avg_g == 0:
+            return 0.0
+        return 100.0 - 100.0 / (1.0 + avg_g / avg_l)
+
+    avg_g = sum(gains[:period]) / period
+    avg_l = sum(losses[:period]) / period
+    out[period] = resolve(avg_g, avg_l)
+
+    for i in range(period, len(gains)):
+        avg_g = (avg_g * (period - 1) + gains[i]) / period
+        avg_l = (avg_l * (period - 1) + losses[i]) / period
+        out[i + 1] = resolve(avg_g, avg_l)
+    return out
+
+
+def test_rsi_wilder_matches_oracle():
+    """O RSI vetorizado tem que bater com o oraculo de Wilder em loop explicito.
+
+    Sem isto a definicao do indicador nao e testada: a suite antiga so verificava
+    que uma alta forte da OVERBOUGHT, o que media simples e Wilder satisfazem igual.
+    """
+    series = {
+        "alta monotona": [100.0 + i for i in range(40)],
+        "queda monotona": [100.0 - i for i in range(40)],
+        "serie plana": [100.0] * 40,
+        "sobe-desce-lateral": ([100 + i * 0.5 for i in range(20)]
+                               + [110 - i * 0.8 for i in range(20)]
+                               + [94 + (1.5 if i % 2 else -1.5) for i in range(20)]),
+    }
+    for label, closes in series.items():
+        got = wilder_rsi(pd.Series(closes))
+        ref = _oracle_wilder_rsi(closes)
+        assert len(got) == len(closes), f"{label}: tamanho do retorno mudou"
+        for i, expected in enumerate(ref):
+            value = got.iloc[i]
+            if expected is None:
+                assert pd.isna(value), f"{label} idx {i}: esperado NaN, veio {value}"
+            else:
+                assert not pd.isna(value), f"{label} idx {i}: esperado {expected}, veio NaN"
+                assert abs(float(value) - expected) < 1e-9, (
+                    f"{label} idx {i}: esperado {expected}, veio {value}"
+                )
+    print("[PASS] RSI Wilder: bate com o oraculo em 4 series, valor a valor.")
+
+
+def test_rsi_wilder_reference_values():
+    """Casos de borda com resposta conhecida, mais a serie do proprio Wilder."""
+    closes = [44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42,
+              45.84, 46.08, 45.89, 46.03, 45.61, 46.28, 46.28]
+    # hand-check: avg_gain = 3.34/14, avg_loss = 1.40/14
+    expected = 100.0 - 100.0 / (1.0 + 3.34 / 1.40)
+    got = float(wilder_rsi(pd.Series(closes)).iloc[-1])
+    assert abs(got - expected) < 1e-9, f"serie do Wilder: esperado {expected}, veio {got}"
+
+    # Serie plana: sem ganho e sem perda -> 50, nao 100 nem NaN.
+    flat = wilder_rsi(pd.Series([100.0] * 40))
+    assert float(flat.iloc[-1]) == 50.0, f"serie plana deveria dar 50, veio {flat.iloc[-1]}"
+
+    # Alta monotona: so ganho -> 100. Queda monotona: so perda -> 0.
+    assert float(wilder_rsi(pd.Series([100.0 + i for i in range(40)])).iloc[-1]) == 100.0
+    assert float(wilder_rsi(pd.Series([100.0 - i for i in range(40)])).iloc[-1]) == 0.0
+
+    # Warmup: nao existe RSI antes de `period` variacoes.
+    warm = wilder_rsi(pd.Series([100.0 + i for i in range(40)]))
+    assert warm.iloc[:14].isna().all(), "as 14 primeiras posicoes deveriam ser NaN"
+    assert not pd.isna(warm.iloc[14]), "a posicao 14 deveria ser o primeiro RSI definido"
+
+    # Serie curta demais: tudo NaN, sem excecao.
+    short = wilder_rsi(pd.Series([float(i) for i in range(10)]))
+    assert len(short) == 10 and short.isna().all()
+    print("[PASS] RSI Wilder: serie de referencia, serie plana, warmup e serie curta.")
+
+
+def test_rsi_wilder_gap_behavior():
+    """Gap (NaN) na serie nao pode virar NaN silencioso nem valor inventado.
+
+    Comportamento documentado: a suavizacao de Wilder simplesmente NAO ATUALIZA na
+    barra ausente, entao o valor e carregado adiante (carry-forward) em vez de virar
+    NaN. E os valores depois do gap diferem dos de uma serie sem gap -- a barra que
+    faltou nunca entra na media. Este teste trava as duas coisas.
+    """
+    base = [100.0 + (i % 7) - (i % 3) for i in range(40)]
+    clean = pd.Series(base)
+    gapped = clean.copy()
+    gapped.iloc[20] = np.nan
+
+    a, b = wilder_rsi(clean), wilder_rsi(gapped)
+
+    assert len(a) == len(b) == len(clean), "o gap mudou o tamanho da serie"
+    assert b.iloc[14:].notna().all(), "gap nao pode produzir NaN fora do warmup"
+
+    # Carry-forward: a barra ausente congela o indicador.
+    assert b.iloc[20] == b.iloc[19], "esperado carry-forward na barra ausente"
+
+    # E o gap realmente remove informacao: a cauda diverge da serie limpa.
+    assert abs(float(a.iloc[-1]) - float(b.iloc[-1])) > 1e-9, (
+        "serie com gap deveria divergir da serie limpa"
+    )
+    print("[PASS] RSI Wilder: gap faz carry-forward e remove informacao, sem NaN silencioso.")
+
+
+def test_live_and_ml_rsi_agree():
+    """As duas implementacoes de RSI do repo tem que dar o mesmo numero.
+
+    `features/indicators.py:wilder_rsi` alimenta o LLM e o Risk Manager;
+    `ml/dataset.py:_rsi` alimenta a feature `rsi_14` do dataset e o baseline
+    `rsi_mean_reversion`. Se elas divergirem, backtest e live medem coisas diferentes.
+    """
+    closes = pd.Series([100.0 + (i % 11) * 1.3 - (i % 5) * 0.7 for i in range(120)])
+    live = wilder_rsi(closes)
+    ml = ml_rsi(closes)
+
+    assert len(live) == len(ml) == len(closes)
+    diff = (live - ml).abs().max()
+    assert diff < 1e-9, f"as duas implementacoes divergem em {diff}"
+    print("[PASS] RSI: caminho live e dataset de ML produzem o mesmo valor.")
+
+
 if __name__ == "__main__":
     print("="*50)
     print("Iniciando Bateria de Testes Matemáticos (Sem LLM)")
@@ -314,4 +522,9 @@ if __name__ == "__main__":
     test_ema_crossover()
     test_volume_profile()
     test_volatility_atr_structure()
+    test_atr_numpy_matches_pandas()
+    test_rsi_wilder_matches_oracle()
+    test_rsi_wilder_reference_values()
+    test_rsi_wilder_gap_behavior()
+    test_live_and_ml_rsi_agree()
     print("\n>>> TODOS OS TESTES UNITÁRIOS PASSARAM <<<\n")

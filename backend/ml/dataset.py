@@ -109,15 +109,43 @@ def _validate_candles(candles: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _wilder_average(values: pd.Series, period: int) -> pd.Series:
+    """Suavizacao de Wilder: semente = SMA dos primeiros `period` valores, depois
+    recursao exponencial com alpha = 1/period.
+
+    Mantido em sincronia com `backend/features/indicators.py:_wilder_average`.
+    `test_indicators.py::test_live_and_ml_rsi_agree` trava os dois lado a lado.
+    """
+    seeded = values.iloc[period - 1:].copy()
+    seeded.iloc[0] = values.iloc[:period].mean()
+    return seeded.ewm(alpha=1 / period, adjust=False).mean().reindex(values.index)
+
+
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    delta = close.diff()
-    gains = delta.clip(lower=0).rolling(period, min_periods=period).mean()
-    losses = (-delta.clip(upper=0)).rolling(period, min_periods=period).mean()
-    rs = gains / losses.replace(0.0, float("nan"))
+    """RSI de Wilder (1978) -- mesma matematica do caminho live.
+
+    Antes usava media movel simples (`rolling(period).mean()`), que e um oscilador
+    diferente: tem memoria efetiva mais curta e cruza os limiares 70/30 com muito mais
+    frequencia. `rsi_mean_reversion` em baselines.py usa exatamente esses limiares, entao
+    a definicao importa para o baseline.
+    """
+    if len(close) < period + 1:
+        return pd.Series(float("nan"), index=close.index)
+
+    delta = close.diff().iloc[1:]
+    gains = delta.clip(lower=0.0)
+    losses = (-delta).clip(lower=0.0)
+
+    avg_gain = _wilder_average(gains, period)
+    avg_loss = _wilder_average(losses, period)
+
+    rs = avg_gain / avg_loss.replace(0.0, float("nan"))
     result = 100.0 - (100.0 / (1.0 + rs))
-    result = result.mask((losses == 0) & (gains > 0), 100.0)
-    result = result.mask((gains == 0) & (losses > 0), 0.0)
-    return result.mask((gains == 0) & (losses == 0), 50.0)
+    result = result.mask((avg_loss == 0) & (avg_gain > 0), 100.0)
+    result = result.mask((avg_gain == 0) & (avg_loss > 0), 0.0)
+    result = result.mask((avg_gain == 0) & (avg_loss == 0), 50.0)
+    # `delta` perdeu a posicao 0; realinha para o retorno ter o tamanho da entrada.
+    return result.reindex(close.index)
 
 
 def _regularize_candles(frame: pd.DataFrame, config: DatasetConfig) -> pd.DataFrame:

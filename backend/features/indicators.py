@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -32,6 +33,62 @@ def get_historical_klines(
 
 
 
+def _wilder_average(values: pd.Series, period: int) -> pd.Series:
+    """Suavizacao de Wilder: semente = SMA dos primeiros `period` valores, depois
+    recursao exponencial com alpha = 1/period.
+
+    Nao e o mesmo que `ewm(alpha=1/period, adjust=False)` puro: o pandas semeia com a
+    PRIMEIRA observacao, enquanto Wilder (1978), o ta-lib e o TradingView semeiam com a
+    SMA. A diferenca pesa quando o lookback e curto -- com os 50 candles que o
+    payload_builder usa, um seed pela primeira observacao ainda carrega ~7% de peso.
+    """
+    seeded = values.iloc[period - 1:].copy()
+    seeded.iloc[0] = values.iloc[:period].mean()
+    return seeded.ewm(alpha=1 / period, adjust=False).mean().reindex(values.index)
+
+
+def wilder_rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    """RSI de Wilder (1978).
+
+    Os limiares 70/30 que classificam esta saida ficam em `calculate_technical_status`
+    (OVERBOUGHT >= 70, OVERSOLD <= 30); o Risk Manager consome apenas a string de status.
+
+    A versao anterior usava media movel simples dos ganhos/perdas, que tem memoria
+    efetiva mais curta: oscila mais e cruzava os limiares com muito mais frequencia.
+    Um docstring anterior afirmava "489 falsos OVERBOUGHT e 432 falsos OVERSOLD" sem
+    citar dataset, intervalo ou consulta, e esses numeros nao foram reproduzidos por
+    nenhuma serie disponivel. Em vez de congelar um novo par de numeros, a medicao
+    virou um script que qualquer um roda de novo:
+
+        py -3.11 backend\\tests\\audit_rsi_definition.py
+
+    Na execucao registrada (BTC/BRL 1m, 5543 candles, timestamps
+    1788922800..1789380000), ele reportou 515 e 457. Trate esses valores como a
+    foto de um banco que cresce: rode o script de novo antes de cita-los.
+
+    Retorna NaN nas primeiras `period` posicoes -- nao ha RSI definido antes disso.
+    `backend/ml/dataset.py:_rsi` implementa a mesma matematica para o dataset de ML;
+    `test_indicators.py::test_live_and_ml_rsi_agree` trava as duas lado a lado.
+    """
+    if len(close) < period + 1:
+        return pd.Series(float("nan"), index=close.index)
+
+    delta = close.diff().iloc[1:]
+    gains = delta.clip(lower=0.0)
+    losses = (-delta).clip(lower=0.0)
+
+    avg_gain = _wilder_average(gains, period)
+    avg_loss = _wilder_average(losses, period)
+
+    result = 100.0 - (100.0 / (1.0 + avg_gain / avg_loss.replace(0.0, float("nan"))))
+    result = result.mask((avg_loss == 0) & (avg_gain > 0), 100.0)
+    result = result.mask((avg_gain == 0) & (avg_loss > 0), 0.0)
+    result = result.mask((avg_gain == 0) & (avg_loss == 0), 50.0)
+    # `delta` perdeu a posicao 0, entao o resultado tem um indice a menos.
+    # Realinha em close.index para que o retorno sempre tenha o mesmo tamanho da entrada.
+    return result.reindex(close.index)
+
+
 def calculate_technical_status(df: pd.DataFrame, asset: str = "BTC/BRL", timeframe: str = "1m") -> dict:
     """Calcula indicadores nativamente em Pandas."""
     found_klines = len(df)
@@ -49,12 +106,8 @@ def calculate_technical_status(df: pd.DataFrame, asset: str = "BTC/BRL", timefra
             "db_path": str(get_db_path()),
         }
 
-    # RSI (14)
-    delta = df["close"].diff()
-    gain = delta.where(delta > 0, 0.0).rolling(window=14, min_periods=1).mean()
-    loss = (-delta.where(delta < 0, 0.0)).rolling(window=14, min_periods=1).mean()
-    rs = gain / loss
-    df["RSI"] = 100 - (100 / (1 + rs))
+    # RSI (14) -- Wilder
+    df["RSI"] = wilder_rsi(df["close"], period=14)
 
     # MACD (12, 26, 9)
     ema12 = df["close"].ewm(span=12, adjust=False).mean()
@@ -64,10 +117,20 @@ def calculate_technical_status(df: pd.DataFrame, asset: str = "BTC/BRL", timefra
     df["MACD_Hist"] = df["MACD"] - macd_signal
 
     # ATR (14)
-    high_low = df["high"] - df["low"]
-    high_close = (df["high"] - df["close"].shift()).abs()
-    low_close = (df["low"] - df["close"].shift()).abs()
-    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    # Versao numpy do antigo `pd.concat([...], axis=1).max(axis=1)`: ~1,7x mais rapido
+    # com valor identico. Duas armadilhas documentadas aqui:
+    #   - `np.maximum` PROPAGA NaN e o pandas IGNORA. A linha 0 tem NaN em
+    #     close.shift(), entao np.maximum produziria NaN onde o pandas produz numero,
+    #     deslocando a janela de 14 linhas (era a regressao do PR #9).
+    #   - `np.fmax` ignora NaN como o pandas e, ao contrario de `np.nanmax`, nao emite
+    #     RuntimeWarning quando as tres series sao NaN na mesma linha.
+    high_low = (df["high"] - df["low"]).to_numpy()
+    high_close = (df["high"] - df["close"].shift()).abs().to_numpy()
+    low_close = (df["low"] - df["close"].shift()).abs().to_numpy()
+    true_range = pd.Series(
+        np.fmax(np.fmax(high_low, high_close), low_close),
+        index=df.index,
+    )
     df["ATR"] = true_range.rolling(window=14, min_periods=1).mean()
 
     # Bollinger Bands (20, 2)
@@ -165,6 +228,12 @@ def calculate_technical_status(df: pd.DataFrame, asset: str = "BTC/BRL", timefra
         for idx, row in df.iterrows():
             close_p = float(row["close"])
             vol = float(row["volume"])
+            # Um candle com close/volume NaN fazia `int(NaN)` estourar ValueError e
+            # derrubar a funcao inteira (nao havia caminho de erro: era crash, nao
+            # "status": "ERROR"). Pulamos a linha em vez de morrer -- o POC e um
+            # histograma de volume, uma barra ausente so nao contribui.
+            if pd.isna(close_p) or pd.isna(vol):
+                continue
             bin_idx = int((close_p - min_price) / bin_width)
             if bin_idx >= 10:
                 bin_idx = 9
