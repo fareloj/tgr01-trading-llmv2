@@ -12,6 +12,7 @@ import pytest
 
 from backend.agents.contracts import DecisionOutput, AnalysisPlan
 from backend.agents.decision_agent import DecisionAgent
+from backend.agents.model_config import DEFAULT_DECISION_MODEL
 from backend.tests.compare_prompt_profiles import PromptProfileRunner
 
 
@@ -63,7 +64,9 @@ class TestDecisionAgentResponseFormat:
         monkeypatch.delenv("LLM_MODEL", raising=False)
         agent = DecisionAgent()
         assert agent.base_url == "http://localhost:11434/v1"
-        assert agent.model == "glm-5.2:cloud"
+        # The default decision model is validated on the local daemon; see
+        # backend/tests/test_model_providers.py for the live contract probe.
+        assert agent.model == DEFAULT_DECISION_MODEL
         assert agent._is_local_provider() is True
         assert agent._response_format(DecisionOutput, "decision_output")["type"] == "json_schema"
 

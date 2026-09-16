@@ -122,10 +122,39 @@ class NewsAnalysis(StrictToolContract):
     status: Literal["OK", "NO_NEWS", "DEGRADED"]
     bias: Literal["POSITIVE", "NEGATIVE", "NEUTRAL", "UNCERTAIN"]
     confidence: int = Field(ge=0, le=100)
-    summary: str = Field(max_length=480)
-    evidence_news_ids: list[str] = Field(default_factory=list, max_length=8)
-    conflicts: list[str] = Field(default_factory=list, max_length=3)
-    gaps: list[str] = Field(default_factory=list, max_length=3)
+    summary: str = Field(
+        max_length=480,
+        description=(
+            "One short paragraph of at most 480 characters (roughly 70 words). "
+            "State relevance, direction and uncertainty concisely; do not repeat "
+            "headline text and do not exceed the limit."
+        ),
+    )
+    evidence_news_ids: list[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description=(
+            "IDs copied from the supplied news_context records. Never invent ids "
+            "and never include prose. Empty when status is NO_NEWS."
+        ),
+    )
+    conflicts: list[str] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "At most 3 very short phrases (under 80 characters each) naming "
+            "conflicting signals. Never write full paragraphs here."
+        ),
+    )
+    gaps: list[str] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "At most 3 very short phrases (under 80 characters each) naming "
+            "missing information, such as 'no prices in headlines'. Never write "
+            "full paragraphs here."
+        ),
+    )
     untrusted_instruction_detected: bool = False
 
 
@@ -141,9 +170,35 @@ class TechnicalAnalysis(StrictToolContract):
     ]
     direction: Literal["BULLISH", "BEARISH", "NEUTRAL", "UNCERTAIN"]
     confidence: int = Field(ge=0, le=100)
-    summary: str = Field(max_length=480)
-    evidence_fields: list[str] = Field(default_factory=list, max_length=8)
-    counter_evidence: list[str] = Field(default_factory=list, max_length=4)
+    summary: str = Field(
+        max_length=480,
+        description=(
+            "One short paragraph of at most 480 characters (roughly 70 words). "
+            "Keep it under 350 characters when possible and never exceed the limit."
+        ),
+    )
+    evidence_fields: list[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description=(
+            "Field paths into technical_context that support the assessment, "
+            "written as dot-paths only -- for example 'rsi.status', "
+            "'macd.histogram', 'ema.ema9', 'volatility_atr.value'. "
+            "Allowed roots: current_price, status, returns, trend, rsi, macd, "
+            "ema, ema_crossover, volatility, volatility_atr, volume, "
+            "volume_profile, bollinger_bands, drawdown, range, data_quality, "
+            "news, news_alignment. Put reasoning in summary; never write "
+            "sentences or values in this list."
+        ),
+    )
+    counter_evidence: list[str] = Field(
+        default_factory=list,
+        max_length=4,
+        description=(
+            "Same dot-path format as evidence_fields, for facts that contradict "
+            "the assessment. Never write sentences, values or explanations here."
+        ),
+    )
     news_alignment: Literal["ALIGNED", "CONFLICTING", "PARTIAL", "UNRELATED", "UNAVAILABLE"]
     invalidation_conditions: list[str] = Field(default_factory=list, max_length=4)
 
@@ -151,7 +206,35 @@ class TechnicalAnalysis(StrictToolContract):
 class MultiAgentDecision(StrictToolContract):
     action: Literal["BUY", "SELL", "HOLD"]
     conviction: int = Field(ge=0, le=80)
-    thesis: str = Field(max_length=360)
-    evidence_fields: list[str] = Field(default_factory=list, max_length=8)
-    counter_evidence: list[str] = Field(default_factory=list, max_length=4)
+    thesis: str = Field(
+        max_length=360,
+        description=(
+            "Why this action follows from the evidence, in at most 360 "
+            "characters (roughly 50 words). This is the only place for "
+            "reasoning; keep it concise and never exceed the limit."
+        ),
+    )
+    evidence_fields: list[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description=(
+            "Field paths into the accepted inputs that support the action, "
+            "written as dot-paths only -- for example "
+            "'technical_context.rsi.status', 'news_report.bias', "
+            "'technical_report.direction', "
+            "'original_snapshot.data_health.is_news_stale'. "
+            "Allowed roots: original_snapshot, news_report, technical_report, "
+            "data_health, news_risk, portfolio_context, technical_context. "
+            "Put reasoning in thesis; never write sentences or values here."
+        ),
+    )
+    counter_evidence: list[str] = Field(
+        default_factory=list,
+        max_length=4,
+        description=(
+            "Same dot-path format as evidence_fields, for facts that contradict "
+            "the proposal. Put reasoning in thesis; never write sentences, "
+            "values or explanations here."
+        ),
+    )
     invalidation_conditions: list[str] = Field(default_factory=list, max_length=4)

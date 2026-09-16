@@ -37,12 +37,21 @@ def test_defaults_are_disabled_and_shadow_only():
     assert config.decision_model == DEFAULT_DECISION_MODEL
 
 
-def test_default_role_assignments_match_experimental_cloud_models():
+def test_default_role_assignments_match_validated_cloud_models():
     config = resolve_multi_agent_model_config()
 
-    assert config.news_model == "deepseek-v4-flash:cloud"
-    assert config.technical_model == "deepseek-v4-flash:cloud"
-    assert config.decision_model == "glm-5.2:cloud"
+    assert config.news_model == "glm-5.3:cloud"
+    assert config.technical_model == "glm-5.3:cloud"
+    assert config.decision_model == "kimi-k2.7-code:cloud"
+
+
+def test_default_roles_stay_on_ollama_to_avoid_spending_opencode_go_quota():
+    """OpenCode Go has per-model monthly caps; routine cycles must not spend them."""
+    config = resolve_multi_agent_model_config()
+
+    for role_model in config.roles().values():
+        assert role_model.provider == "ollama"
+        assert role_model.base_url == DEFAULT_LLM_BASE_URL
 
 
 def test_role_models_and_endpoint_can_be_overridden(monkeypatch):

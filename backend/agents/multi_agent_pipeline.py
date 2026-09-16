@@ -20,8 +20,13 @@ from backend.agents.contracts import (
     NewsAnalysis,
     TechnicalAnalysis,
 )
-from backend.agents.decision_agent import load_api_keys, unwrap_single_json_fence
-from backend.agents.model_config import MultiAgentModelConfig, resolve_multi_agent_model_config
+from backend.agents.decision_agent import unwrap_single_json_fence
+from backend.agents.model_config import (
+    MultiAgentModelConfig,
+    load_provider_api_keys,
+    resolve_multi_agent_model_config,
+    resolve_provider,
+)
 
 
 NEWS_SYSTEM_PROMPT = """
@@ -120,45 +125,81 @@ class MultiAgentPipelineResult:
     decision: AgentCall
 
 
+_JSON_SCHEMA_UNSUPPORTED_MARKERS = (
+    "response_format",
+    "json_schema",
+    "unavailable now",
+    "not supported",
+    "unsupported",
+)
+
+
 class StructuredAgentClient:
+    """Calls one role's model, tolerating per-provider request differences.
+
+    Each role may live on a different provider, so this class builds a client per
+    role instead of assuming one shared endpoint. Two provider quirks are handled
+    explicitly because they were observed live:
+
+    - OpenCode Go rejects requests without the `x-opencode-session` header.
+    - Some endpoints refuse `response_format: json_schema`; those fall back to
+      `json_object` and rely on the Pydantic contract for validation.
+    """
+
     def __init__(self, config: MultiAgentModelConfig | None = None):
         self.config = config or resolve_multi_agent_model_config()
-        keys = load_api_keys()
-        self.api_key = keys[0] if keys else "ollama"
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.config.base_url,
+        self._clients: dict[str, OpenAI] = {}
+        self._response_format_override: dict[str, dict] = {}
+        self._last_response_format: dict[str, str] = {}
+
+    def _client_for(self, role_model) -> OpenAI:
+        """Build and cache one OpenAI-compatible client per provider."""
+        provider = role_model.provider
+        if provider in self._clients:
+            return self._clients[provider]
+
+        keys = load_provider_api_keys(provider)
+        if not keys:
+            raise RuntimeError(
+                f"no credential configured for provider {provider!r}; set "
+                f"one of {', '.join(resolve_provider(provider).api_key_envs)}"
+            )
+
+        headers = {}
+        if role_model.session_header:
+            headers[role_model.session_header] = os.getenv(
+                "OPENCODE_GO_SESSION_ID", "tgr01-paper-multi-agent"
+            )
+        self._clients[provider] = OpenAI(
+            api_key=keys[0],
+            base_url=role_model.base_url,
             timeout=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
             max_retries=0,
+            default_headers=headers or None,
         )
+        return self._clients[provider]
 
     @staticmethod
-    def _request_limits(model: str) -> dict:
-        if model.startswith("glm-5.2"):
-            return {
-                "max_tokens": int(os.getenv("MULTI_AGENT_GLM_MAX_TOKENS", "5000"))
-            }
-        if model.startswith("deepseek-v4-flash"):
-            return {
-                "max_tokens": int(os.getenv("MULTI_AGENT_DEEPSEEK_MAX_TOKENS", "3000"))
-            }
+    def _request_limits(role_model) -> dict:
+        budget = role_model.max_tokens
+        model = role_model.model
+        effort = getattr(role_model, "reasoning_effort", None)
         if model.startswith("gpt-oss:") or model.startswith("openai/gpt-oss"):
             return {
-                "max_completion_tokens": int(os.getenv("MULTI_AGENT_GPT_OSS_MAX_TOKENS", "1800")),
-                "reasoning_effort": os.getenv("GPT_OSS_REASONING_EFFORT", "low"),
+                "max_completion_tokens": budget,
+                "reasoning_effort": effort or os.getenv("GPT_OSS_REASONING_EFFORT", "low"),
             }
-        return {"max_tokens": int(os.getenv("MULTI_AGENT_OTHER_MAX_TOKENS", "1400"))}
+        limits: dict = {"max_tokens": budget}
+        if effort:
+            # Reasoning models otherwise spend the whole completion budget on
+            # hidden chain-of-thought and can return an empty body (measured on
+            # glm-5.3: 11/12 -> 12/12 valid, ~7x faster, once effort=low).
+            limits["reasoning_effort"] = effort
+        return limits
 
-    def call(
-        self,
-        *,
-        role: str,
-        model: str,
-        system_prompt: str,
-        payload: dict,
-        schema: type[SchemaT],
-    ) -> AgentCall:
-        response_format = {
+    @staticmethod
+    def _json_schema_format(role: str, schema: type[SchemaT]) -> dict:
+        return {
             "type": "json_schema",
             "json_schema": {
                 "name": f"{role}_output",
@@ -166,7 +207,10 @@ class StructuredAgentClient:
                 "schema": schema.model_json_schema(),
             },
         }
-        messages = [
+
+    @staticmethod
+    def _build_messages(role: str, system_prompt: str, payload: dict, schema: type[SchemaT]) -> list[dict]:
+        return [
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
@@ -182,14 +226,59 @@ class StructuredAgentClient:
                 ),
             },
         ]
+
+    @classmethod
+    def _is_json_schema_rejection(cls, error: Exception) -> bool:
+        """Distinguish 'this provider will not do json_schema' from other errors."""
+        status = getattr(error, "status_code", None)
+        if status not in (400, 404, 422):
+            return False
+        message = str(error).lower()
+        return any(marker in message for marker in _JSON_SCHEMA_UNSUPPORTED_MARKERS)
+
+    def call(
+        self,
+        *,
+        role: str,
+        role_model=None,
+        model: str | None = None,
+        system_prompt: str,
+        payload: dict,
+        schema: type[SchemaT],
+    ) -> AgentCall:
+        if role_model is None:
+            role_model = self.config.role(role)
+        resolved_model = model or role_model.model
+        client = self._client_for(role_model)
+        messages = self._build_messages(role, system_prompt, payload, schema)
+        limits = self._request_limits(role_model)
+
+        response_format = self._response_format_override.get(role) or self._json_schema_format(role, schema)
         started = time.perf_counter()
-        response = self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            response_format=response_format,
-            temperature=0.0,
-            **self._request_limits(model),
-        )
+        try:
+            response = client.chat.completions.create(
+                model=resolved_model,
+                messages=messages,
+                response_format=response_format,
+                temperature=role_model.temperature,
+                **limits,
+            )
+        except Exception as error:
+            # One retry only, and only for an explicit response_format refusal.
+            if not self._is_json_schema_rejection(error):
+                raise
+            self._response_format_override[role] = {"type": "json_object"}
+            self._last_response_format[role] = "json_object_fallback"
+            response = client.chat.completions.create(
+                model=resolved_model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=role_model.temperature,
+                **limits,
+            )
+        else:
+            self._last_response_format[role] = response_format["type"]
+
         latency_ms = (time.perf_counter() - started) * 1000
         content = unwrap_single_json_fence(response.choices[0].message.content or "")
         try:
@@ -200,10 +289,14 @@ class StructuredAgentClient:
             raise ValueError(f"invalid {role} JSON output: {type(error).__name__}; preview={preview!r}") from error
         return AgentCall(
             role=role,
-            model=model,
+            model=resolved_model,
             latency_ms=round(latency_ms, 3),
             output=output,
         )
+
+    def response_format_for(self, role: str) -> str | None:
+        """Expose the response format actually used, for audit and tests."""
+        return self._last_response_format.get(role)
 
 
 class MultiAgentAnalysisPipeline:
@@ -337,7 +430,7 @@ class MultiAgentAnalysisPipeline:
         }
         news = self.client.call(
             role="news",
-            model=self.config.news_model,
+            role_model=self.config.news,
             system_prompt=NEWS_SYSTEM_PROMPT,
             payload=news_input,
             schema=NewsAnalysis,
@@ -351,7 +444,7 @@ class MultiAgentAnalysisPipeline:
         }
         technical = self.client.call(
             role="technical",
-            model=self.config.technical_model,
+            role_model=self.config.technical,
             system_prompt=TECHNICAL_SYSTEM_PROMPT,
             payload=technical_input,
             schema=TechnicalAnalysis,
@@ -365,7 +458,7 @@ class MultiAgentAnalysisPipeline:
         }
         decision = self.client.call(
             role="decision",
-            model=self.config.decision_model,
+            role_model=self.config.decision,
             system_prompt=DECISION_SYSTEM_PROMPT,
             payload=decision_input,
             schema=MultiAgentDecision,

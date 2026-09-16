@@ -1,6 +1,7 @@
 import pytest
 
 from backend.agents.contracts import MultiAgentDecision, NewsAnalysis, TechnicalAnalysis
+from backend.agents.model_config import resolve_multi_agent_model_config
 from backend.agents.multi_agent_pipeline import MultiAgentAnalysisPipeline, StructuredAgentClient
 from backend.tests.run_multi_agent_historical_campaign import sample_completed
 
@@ -47,16 +48,53 @@ def test_news_without_source_ids_gets_deterministic_evidence_ids():
     assert "id" not in source[0]
 
 
-def test_new_cloud_role_models_get_contract_safe_budgets(monkeypatch):
-    monkeypatch.delenv("MULTI_AGENT_DEEPSEEK_MAX_TOKENS", raising=False)
-    monkeypatch.delenv("MULTI_AGENT_GLM_MAX_TOKENS", raising=False)
+def test_role_request_limits_use_the_resolved_role_model(monkeypatch):
+    monkeypatch.delenv("GPT_OSS_REASONING_EFFORT", raising=False)
+    config = resolve_multi_agent_model_config()
 
-    assert StructuredAgentClient._request_limits("deepseek-v4-flash:cloud") == {
-        "max_tokens": 3000
-    }
-    assert StructuredAgentClient._request_limits("glm-5.2:cloud") == {
-        "max_tokens": 5000
-    }
+    news_limits = StructuredAgentClient._request_limits(config.news)
+    assert news_limits["max_tokens"] == config.news.max_tokens
+    # glm roles carry the measured low reasoning effort.
+    assert news_limits["reasoning_effort"] == config.news.reasoning_effort
+
+    decision_limits = StructuredAgentClient._request_limits(config.decision)
+    assert decision_limits == {"max_tokens": config.decision.max_tokens}
+
+
+def test_gpt_oss_roles_keep_their_reasoning_budget_contract():
+    from backend.agents.model_config import RoleModel
+
+    role_model = RoleModel(
+        role="decision",
+        model="gpt-oss:120b-cloud",
+        provider="ollama",
+        base_url="http://localhost:11434/v1",
+        temperature=0.0,
+        max_tokens=3000,
+    )
+
+    limits = StructuredAgentClient._request_limits(role_model)
+
+    assert limits["max_completion_tokens"] == 3000
+    assert limits["reasoning_effort"] == "low"
+    assert "max_tokens" not in limits
+
+
+def test_role_without_effort_override_sends_no_reasoning_effort():
+    """Kimi K2.7 scored better without an override; it must not be injected."""
+    from backend.agents.model_config import RoleModel
+
+    role_model = RoleModel(
+        role="decision",
+        model="kimi-k2.7-code:cloud",
+        provider="ollama",
+        base_url="http://localhost:11434/v1",
+        temperature=0.0,
+        max_tokens=8000,
+        reasoning_effort=None,
+    )
+
+    assert StructuredAgentClient._request_limits(role_model) == {"max_tokens": 8000}
 
 
 def test_technical_evidence_rejects_unknown_field_roots():

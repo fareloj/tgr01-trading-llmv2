@@ -283,6 +283,22 @@ class DecisionAgent:
         )
 
     def _request_limits(self, purpose: str) -> dict:
+        if self.model.startswith("glm-5.3"):
+            # glm-5.3 otherwise spends the entire budget on hidden reasoning and can
+            # return an empty body. Measured 2026-09-16 on the live DecisionOutput
+            # contract: effort=low returned valid JSON in ~1s at 142 tokens, versus
+            # ~84s for glm-5.2 at 682 tokens -- uncomfortably close to the 90s
+            # LLM_TIMEOUT_SECONDS ceiling.
+            env_name = (
+                "GLM_PLANNER_MAX_COMPLETION_TOKENS"
+                if purpose == "planner"
+                else "GLM_MAX_COMPLETION_TOKENS"
+            )
+            default_budget = "3500" if purpose == "planner" else "5000"
+            return {
+                "max_tokens": int(os.getenv(env_name, default_budget)),
+                "reasoning_effort": os.getenv("GLM_REASONING_EFFORT", "low"),
+            }
         if self.model.startswith("glm-5.2"):
             env_name = (
                 "GLM_PLANNER_MAX_COMPLETION_TOKENS"
@@ -315,6 +331,17 @@ class DecisionAgent:
                 "max_completion_tokens": int(os.getenv(env_name, default_budget)),
                 "reasoning_effort": os.getenv("GPT_OSS_REASONING_EFFORT", "low"),
             }
+        if self.model.startswith("kimi-k2.7") or self.model.startswith("kimi-k3"):
+            # Kimi responds fast (~3.4s) but wants a larger budget than the generic
+            # local default: 12/12 valid at 8000 vs 10/12 at 5000 in the multi-agent
+            # probe. No reasoning_effort override -- it scored better without one.
+            env_name = (
+                "KIMI_PLANNER_MAX_COMPLETION_TOKENS"
+                if purpose == "planner"
+                else "KIMI_MAX_COMPLETION_TOKENS"
+            )
+            default_budget = "3000" if purpose == "planner" else "8000"
+            return {"max_tokens": int(os.getenv(env_name, default_budget))}
         if self._is_local_provider():
             # Every locally/self-hosted reasoning model tried so far (Nemotron, Qwen,
             # Bonsai, gpt-oss under any tag) reliably spends the whole hosted-Groq default
