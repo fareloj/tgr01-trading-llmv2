@@ -68,3 +68,67 @@ def test_tui_mounts_actions_routes_clicks_and_renders_state():
             assert "DD 1.25%" in str(app.query_one("#exposure", Static).render())
 
     asyncio.run(exercise())
+
+
+def test_tui_renders_nullable_market_and_risk_fields():
+    """A dashboard may legitimately report no candle and an unknown exposure.
+
+    `dashboard_state` emits close=None when there is no candle, and
+    exposure_pct=None when BTC is held without a price. `.get(key, default)`
+    does not protect against a present-but-None value, so both must be handled
+    explicitly or the TUI refresh raises.
+    """
+    async def exercise() -> None:
+        app = TuiHarness()
+        async with app.run_test(size=(190, 52)) as pilot:
+            await pilot.pause()
+            app.render_state(
+                {
+                    "db_path": "paper.db",
+                    "workers": {
+                        "price_worker": {"status": "missing", "age_seconds": None},
+                        "news_worker": {"status": "missing", "age_seconds": None},
+                    },
+                    "latest_kline": {"close": None, "age_seconds": None},
+                    "clock": {"skew_seconds": None, "status": "unknown"},
+                    "portfolio": {
+                        "exposure_pct": None,
+                        "equity_brl": None,
+                        "daily_drawdown_pct": None,
+                    },
+                    "rag": {"documents": 0, "chunks": 0},
+                    "logs": [],
+                }
+            )
+            candle = str(app.query_one("#candle", Static).render())
+            exposure = str(app.query_one("#exposure", Static).render())
+            assert "R$ --" in candle
+            assert "Exp --" in exposure
+            assert "DD --" in exposure
+
+    asyncio.run(exercise())
+
+
+def test_tui_still_renders_a_real_zero_close_and_exposure():
+    """Zero is a legitimate value and must not be shown as unknown."""
+    async def exercise() -> None:
+        app = TuiHarness()
+        async with app.run_test(size=(190, 52)) as pilot:
+            await pilot.pause()
+            app.render_state(
+                {
+                    "db_path": "paper.db",
+                    "workers": {},
+                    "latest_kline": {"close": 0.0, "age_seconds": 0},
+                    "clock": {"skew_seconds": 0, "status": "OK"},
+                    "portfolio": {"exposure_pct": 0.0, "equity_brl": 0.0, "daily_drawdown_pct": 0.0},
+                    "rag": {"documents": 0, "chunks": 0},
+                    "logs": [],
+                }
+            )
+            candle = str(app.query_one("#candle", Static).render())
+            exposure = str(app.query_one("#exposure", Static).render())
+            assert "R$ 0" in candle
+            assert "Exp 0.00%" in exposure
+
+    asyncio.run(exercise())

@@ -153,16 +153,25 @@ class TradingOpsTui(App):
         clock = state.get("clock", {})
         portfolio = state.get("portfolio", {})
         rag = state.get("rag", {})
+        # These fields are nullable: there may be no candle yet, and exposure is
+        # unknown when BTC is held without a price. A `.get(key, default)` does
+        # not help, because the key exists with a None value.
+        close = kline.get("close")
+        close_label = "--" if close is None else f"{close:,.0f}"
+        exposure = portfolio.get("exposure_pct")
+        exposure_label = "--" if exposure is None else f"{exposure:.2f}%"
+        equity = portfolio.get("equity_brl")
+        equity_label = "--" if equity is None else f"{equity:,.2f}"
         self.query_one("#price", Static).update(f"PRICE WORKER\n{price.get('status', '--')} | {age(price.get('age_seconds'))}")
         self.query_one("#news", Static).update(f"NEWS WORKER\n{news.get('status', '--')} | {age(news.get('age_seconds'))}")
-        self.query_one("#candle", Static).update(f"CANDLE BTC/BRL\nR$ {kline.get('close', 0):,.0f} | {age(kline.get('age_seconds'))}")
+        self.query_one("#candle", Static).update(f"CANDLE BTC/BRL\nR$ {close_label} | {age(kline.get('age_seconds'))}")
         self.query_one("#clock", Static).update(f"CLOCK SKEW\n{clock.get('skew_seconds', '--')}s | {clock.get('status', '--')}")
         drawdown = portfolio.get("daily_drawdown_pct")
         drawdown_label = "--" if drawdown is None else f"{drawdown:.2f}%"
         self.query_one("#exposure", Static).update(
             "PAPER RISK\n"
-            f"DD {drawdown_label} | Exp {portfolio.get('exposure_pct', 0):.2f}% | "
-            f"R$ {portfolio.get('equity_brl', 0):,.2f}"
+            f"DD {drawdown_label} | Exp {exposure_label} | "
+            f"R$ {equity_label}"
         )
         self.query_one("#rag", Static).update(f"RAG MEMORY\n{rag.get('documents', 0)} docs | {rag.get('chunks', 0)} chunks")
         self.query_one("#status", Static).update(
