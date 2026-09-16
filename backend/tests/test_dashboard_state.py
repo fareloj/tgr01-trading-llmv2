@@ -275,6 +275,19 @@ def test_live_exposure_is_not_environment_configurable():
     assert policy.LIVE_MAX_EXPOSURE_PCT <= policy._REVIEWED_MAX_EXPOSURE_CEILING
 
 
+def test_freshness_policy_matches_the_pipeline_thresholds():
+    """The console must judge freshness against the runtime's own ceilings."""
+    from backend.core.market_policy import MARKET_DATA_MAX_AGE_SECONDS
+    from backend.features.payload_builder import NEWS_STALE_SECONDS
+
+    policy = dashboard_state.build_freshness_policy()
+
+    assert policy["market_data_stale_threshold_seconds"] == MARKET_DATA_MAX_AGE_SECONDS
+    assert policy["news_stale_threshold_seconds"] == NEWS_STALE_SECONDS
+    assert policy["market_data_stale_threshold_seconds"] > 0
+    assert policy["news_stale_threshold_seconds"] > 0
+
+
 def test_execution_config_fails_closed_on_a_malformed_rate(monkeypatch):
     monkeypatch.setenv("PAPER_FEE_RATE", "not-a-number")
 

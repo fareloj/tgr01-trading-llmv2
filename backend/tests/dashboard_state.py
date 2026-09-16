@@ -28,12 +28,25 @@ from backend.core.db_models import (
 )
 from backend.agents.model_config import resolve_multi_agent_model_config
 from backend.core.clock_sync import check_clock_skew
-from backend.core.market_policy import LIVE_MAX_EXPOSURE_PCT
+from backend.core.market_policy import LIVE_MAX_EXPOSURE_PCT, MARKET_DATA_MAX_AGE_SECONDS
 from backend.core.runtime_safety import MAX_FUTURE_HEARTBEAT_SECONDS, REQUIRED_WORKERS
+from backend.features.payload_builder import NEWS_STALE_SECONDS
 from backend.execution.paper_simulator import PaperExecutionConfig
 from backend.rag.external_client import ExternalRagClient
 from backend.risk.portfolio_guard import trading_day_start
 from backend.risk.risk_manager import RiskManager
+
+
+def build_freshness_policy() -> dict:
+    """Expose the freshness ceilings the pipeline itself enforces.
+
+    The console must judge a candle or news age against the same thresholds the
+    runtime uses, not against a guess, so a stale reading is never shown green.
+    """
+    return {
+        "market_data_stale_threshold_seconds": MARKET_DATA_MAX_AGE_SECONDS,
+        "news_stale_threshold_seconds": NEWS_STALE_SECONDS,
+    }
 
 
 def build_execution_config() -> dict:
@@ -270,6 +283,7 @@ def fetch_dashboard_state(recent_limit: int = 12) -> dict:
         "clock": clock,
         "workers": workers,
         "execution_config": build_execution_config_safe(),
+        "freshness_policy": build_freshness_policy(),
         "model_roles": build_model_roles(),
         "risk_gates": build_risk_gates(),
         "latest_kline": {

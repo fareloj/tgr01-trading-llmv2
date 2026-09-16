@@ -274,6 +274,7 @@ function App() {
   const dataHealth = snapshot.data_health || {};
   const newsRisk = snapshot.news_risk || {};
   const portfolioRisk = snapshot.portfolio || state.portfolio || {};
+  const freshness = state.freshness_policy || {};
   // Audit drawdown/limit: prefer the snapshot values, fall back to the portfolio
   // state, and stay unknown when neither source supplies a number. The limit is
   // never invented, so an unknown limit is shown as unknown instead of 10%.
@@ -309,7 +310,7 @@ function App() {
       </nav>
       <div className="side-meta">
         <div><Database size={14} /><span>Environment<strong>PAPER MODE</strong></span></div>
-        <div><Database size={14} /><span>Database<strong>{state.database?.backend || "PostgreSQL"} <b>Connected</b></strong></span></div>
+        <div><Database size={14} /><span>Database<strong>{state.database?.backend || "desconhecido"} <b className={state.database?.label ? "" : "bad"}>{state.database?.label ? "Connected" : "unknown"}</b></strong></span></div>
         <div><TerminalSquare size={14} /><span>Version<strong>2.0.0</strong></span></div>
         <div><Clock3 size={14} /><span>Local Time<strong>{new Date().toLocaleString("pt-BR")}</strong></span></div>
       </div>
@@ -331,10 +332,10 @@ function App() {
       <section className="metric-strip">
         <MetricCard title="price_worker"><strong><StatusDot tone={healthTone(workers.price_worker?.status)} />{workers.price_worker?.status || "--"}</strong><span>Last heartbeat</span><p>{seconds(workers.price_worker?.age_seconds)} ago</p></MetricCard>
         <MetricCard title="news_worker"><strong><StatusDot tone={healthTone(workers.news_worker?.status)} />{workers.news_worker?.status || "--"}</strong><span>Last heartbeat</span><p>{seconds(workers.news_worker?.age_seconds)} ago</p></MetricCard>
-        <MetricCard title="Latest Candle (BTC/BRL 1m)"><h3>{state.latest_kline?.close == null || state.latest_kline.close === 0 ? "--" : money(state.latest_kline.close)} <small>BRL</small></h3><span>Age</span><p className={freshnessTone(state.latest_kline?.age_seconds, null, null)}>{state.latest_kline?.age_seconds == null ? "idade desconhecida" : `${seconds(state.latest_kline.age_seconds)} ago`}</p></MetricCard>
-        <MetricCard title={`Latest News (${state.latest_news?.source || "--"})`}><p className="headline">{state.latest_news?.headline || "Nenhuma notícia"}</p><span>Age</span><p className={freshnessTone(state.latest_news?.age_seconds, null, null)}>{state.latest_news?.age_seconds == null ? "idade desconhecida" : `${seconds(state.latest_news.age_seconds)} ago`}</p></MetricCard>
+        <MetricCard title="Latest Candle (BTC/BRL 1m)"><h3>{state.latest_kline?.close == null ? "--" : money(state.latest_kline.close)} <small>BRL</small></h3><span>Age</span><p className={freshnessTone(state.latest_kline?.age_seconds, dataHealth.is_market_data_stale, freshness.market_data_stale_threshold_seconds)}>{state.latest_kline?.age_seconds == null ? "idade desconhecida" : `${seconds(state.latest_kline.age_seconds)} ago`}</p></MetricCard>
+        <MetricCard title={`Latest News (${state.latest_news?.source || "--"})`}><p className="headline">{state.latest_news?.headline || "Nenhuma notícia"}</p><span>Age</span><p className={freshnessTone(state.latest_news?.age_seconds, dataHealth.is_news_stale, freshness.news_stale_threshold_seconds)}>{state.latest_news?.age_seconds == null ? "idade desconhecida" : `${seconds(state.latest_news.age_seconds)} ago`}</p></MetricCard>
         <MetricCard title="Paper Position"><h3>{state.position?.avg_cost_brl == null ? "--" : money(state.position.avg_cost_brl)} <small>BRL avg</small></h3><span>Quantity / provenance</span><p>{state.position == null ? "sem posicao paper registrada" : `${Number(state.position.quantity || 0).toFixed(8)} BTC · ${state.position.reconciliation?.method || "native paper"}`}</p></MetricCard>
-        <MetricCard title="Daily Paper Risk"><h3 className={state.portfolio?.daily_drawdown_pct == null ? "" : (state.portfolio.daily_drawdown_pct >= (state.portfolio?.daily_drawdown_limit_pct ?? 10) ? "bad" : "good")}>{state.portfolio?.daily_drawdown_pct == null ? "--" : `${state.portfolio.daily_drawdown_pct.toFixed(2)}%`}</h3><span>Equity / BTC exposure</span><p>R$ {state.portfolio?.equity_brl == null ? "--" : money(state.portfolio.equity_brl)} · {state.portfolio?.exposure_pct == null ? "--" : `${Number(state.portfolio.exposure_pct).toFixed(2)}%`}</p></MetricCard>
+        <MetricCard title="Daily Paper Risk"><h3 className={state.portfolio?.daily_drawdown_pct == null || state.portfolio?.daily_drawdown_limit_pct == null ? "" : (state.portfolio.daily_drawdown_pct >= state.portfolio.daily_drawdown_limit_pct ? "bad" : "good")}>{state.portfolio?.daily_drawdown_pct == null ? "--" : `${state.portfolio.daily_drawdown_pct.toFixed(2)}%`}</h3><span>Equity / BTC exposure</span><p>R$ {state.portfolio?.equity_brl == null ? "--" : money(state.portfolio.equity_brl)} · {state.portfolio?.exposure_pct == null ? "--" : `${Number(state.portfolio.exposure_pct).toFixed(2)}%`}</p></MetricCard>
       </section>
 
       <section className="primary-grid">
@@ -355,7 +356,7 @@ function App() {
           <div className="panel-heading"><h2><SlidersHorizontal size={15} />Decision Audit (Latest)</h2><span>ID: {latest.id || "--"} · {localTime(latest.timestamp)}</span></div>
           <div className="audit-top">
             <div><small>LLM Action</small><strong>{latest.llm_action || "--"}</strong></div>
-            <div><small>Confidence</small><strong>{latest.llm_conviction || 0}%</strong></div>
+            <div><small>Confidence</small><strong>{latest.llm_conviction == null ? "--" : `${latest.llm_conviction}%`}</strong></div>
             <div><small>Final Action</small><strong className="warn">{latest.action || "--"}</strong></div>
             <div><small>Reason</small><p>{latest.reasoning || "--"}</p></div>
           </div>
