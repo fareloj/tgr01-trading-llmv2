@@ -6,7 +6,9 @@ Leia `AGENTS.md` na raiz antes de commitar: o protocolo de revisao e obrigatorio
 ## Estado atual do repositorio
 
 - Branch: `main`, working tree limpo.
-- **28 commits locais a frente de `origin/main` (d99055a). Nada foi enviado.**
+- **Ha commits locais a frente de `origin/main` (d99055a); nada foi enviado.**
+  Nao confie em um numero escrito aqui: ele muda a cada commit. Conte com
+  `git log --oneline origin/main..HEAD`.
 - O `git push` esta bloqueado por autenticacao: nao ha token em ambiente,
   `~/.git-credentials`, nem chave SSH. O Git Credential Manager pede um dialogo
   grafico que um agente nao consegue responder. **O operador precisa rodar
@@ -179,7 +181,8 @@ tom neutro. Nunca `0`, `NO`, verde ou `NORMAL`.
 
 ### Bloqueado pelo operador
 
-1. **`git push origin main`** (28 commits locais).
+1. **`git push origin main`** — todos os commits locais desta sessao estao sem
+   enviar (`git log --oneline origin/main..HEAD` para ver a lista).
 
 ### Decisao pendente do operador (nao do agente)
 
