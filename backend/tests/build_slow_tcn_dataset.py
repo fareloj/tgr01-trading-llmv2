@@ -11,7 +11,11 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-from backend.ml.dataset import FEATURE_COLUMNS
+from backend.ml.dataset import (
+    FEATURE_COLUMNS,
+    INDICATOR_DEFINITION_VERSION,
+    INDICATOR_DEFINITIONS,
+)
 from backend.ml.slow_dataset import SLOW_TCN_FEATURE_COLUMNS, build_slow_tcn_dataset
 
 
@@ -66,6 +70,11 @@ def main() -> int:
         "actionable_move_pct": args.actionable_move_pct,
         "maximum_price_age_minutes": args.maximum_price_age_minutes,
         "feature_columns": list(SLOW_TCN_FEATURE_COLUMNS),
+        # Derived from a market dataset, so record the indicator semantics it was
+        # built from. TCN is archived research outside the live path, but a stale
+        # artifact should still be identifiable.
+        "indicator_definition_version": INDICATOR_DEFINITION_VERSION,
+        "indicator_definitions": dict(INDICATOR_DEFINITIONS),
         "local_source": str(local_path),
         "global_source": str(global_path),
     }

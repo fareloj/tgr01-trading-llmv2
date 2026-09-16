@@ -235,14 +235,15 @@ def _check_model_sanctioned(role: str, provider: str, model: str) -> None:
     )
 
 
-def assert_role_request_allowed(
+def validate_role_endpoint(
     *,
     role: str,
     provider: str,
     model: str,
     base_url: str,
-) -> None:
-    """Validate the three values that decide where a credential is sent.
+) -> str:
+    """Validate the values that decide where a credential is sent, and return the
+    endpoint to use.
 
     `_resolve_role` calls this at startup, and `StructuredAgentClient` calls it
     again at the point of use. The second check matters because `RoleModel` is a
@@ -250,11 +251,23 @@ def assert_role_request_allowed(
     at the sink, a constructed or overridden value could bypass the startup
     checks and send a provider key to an unregistered endpoint.
 
-    An empty `base_url` is treated as "use the registered default".
+    An empty `base_url` resolves to the provider's registered default, so callers
+    always receive a concrete absolute URL rather than an empty string.
     """
     spec = resolve_provider(provider)
-    resolve_allowed_base_url(spec.name, base_url or spec.base_url)
     _check_model_sanctioned(role, spec.name, model)
+    return resolve_allowed_base_url(spec.name, base_url)
+
+
+def assert_role_request_allowed(
+    *,
+    role: str,
+    provider: str,
+    model: str,
+    base_url: str,
+) -> None:
+    """Raise when a role's provider, endpoint or model is not sanctioned."""
+    validate_role_endpoint(role=role, provider=provider, model=model, base_url=base_url)
 
 
 def load_provider_api_keys(provider: str) -> list[str]:

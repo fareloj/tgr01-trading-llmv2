@@ -28,6 +28,7 @@ from backend.agents.model_config import (
     load_provider_api_keys,
     resolve_multi_agent_model_config,
     resolve_provider,
+    validate_role_endpoint,
 )
 
 
@@ -182,15 +183,17 @@ class StructuredAgentClient:
         """
         provider = role_model.provider
         # Validate before touching credentials: a forged RoleModel must not be able
-        # to send a key to an unregistered endpoint.
-        assert_role_request_allowed(
+        # to send a key to an unregistered endpoint. The validated URL is also the
+        # one used below, so an empty base_url resolves to the registered default
+        # instead of being passed to the SDK as a relative path.
+        validated_base_url = validate_role_endpoint(
             role=role_model.role,
             provider=provider,
             model=role_model.model,
             base_url=role_model.base_url,
         )
 
-        cache_key = (provider, role_model.base_url.rstrip("/"))
+        cache_key = (provider, validated_base_url.rstrip("/"))
         if cache_key in self._clients:
             return self._clients[cache_key]
 
@@ -212,7 +215,7 @@ class StructuredAgentClient:
             )
         self._clients[cache_key] = OpenAI(
             api_key=keys[0],
-            base_url=role_model.base_url,
+            base_url=validated_base_url,
             timeout=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
             max_retries=0,
             default_headers=headers or None,
@@ -303,10 +306,20 @@ class StructuredAgentClient:
         r"frequency_penalty|presence_penalty|context_length|unknown\s+field)",
         re.IGNORECASE,
     )
+    # Causes unrelated to the request shape. A format phrase next to one of these
+    # is not a format refusal, so the call must fail closed instead of downgrading.
+    _UNRELATED_CAUSE = re.compile(
+        r"(?:credits|billing|quota|rate\s+limit|insufficient|payment|"
+        r"api\s*key|unauthori[sz]ed|authentication|permission|forbidden|"
+        r"context\s+length|too\s+long|token\s+limit)",
+        re.IGNORECASE,
+    )
 
-    # A window after the negative phrase in which a named parameter would make it
-    # the subject of that phrase.
-    _SUBJECT_WINDOW = 18
+    # How far after the negative phrase to look for a named parameter that would
+    # make it the subject of that phrase. Generous on purpose: a long sentence can
+    # name the real cause well after the negation, and missing it would downgrade
+    # validation for the wrong reason.
+    _SUBJECT_WINDOW = 80
 
     @classmethod
     def _is_json_schema_rejection(cls, error: Exception) -> bool:
@@ -337,7 +350,15 @@ class StructuredAgentClient:
             for match in pattern.finditer(message):
                 gap = match.groupdict().get("gap") or ""
                 after = message[match.end("neg"): match.end("neg") + cls._SUBJECT_WINDOW]
-                if cls._SUBJECT_BEFORE.search(gap) or cls._OTHER_CAUSE.search(after):
+                # A named parameter on either side, or an unrelated cause such as
+                # billing/credits/auth, means the format was not what failed.
+                if (
+                    cls._SUBJECT_BEFORE.search(gap)
+                    or cls._OTHER_CAUSE.search(after)
+                    or cls._OTHER_CAUSE.search(gap)
+                    or cls._UNRELATED_CAUSE.search(gap)
+                    or cls._UNRELATED_CAUSE.search(after)
+                ):
                     continue
                 return True
         return False

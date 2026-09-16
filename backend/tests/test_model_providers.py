@@ -553,6 +553,33 @@ class TestSinkRevalidation:
                 base_url="https://evil.example/v1",
             )
 
+    def test_empty_base_url_resolves_to_the_registered_endpoint(self, monkeypatch):
+        """An empty override must not reach the SDK as a relative URL."""
+        from backend.agents.model_config import validate_role_endpoint
+
+        monkeypatch.setenv("LLM_API_KEY", "ollama-key")
+        resolved = validate_role_endpoint(
+            role="news", provider="ollama", model="glm-5.3:cloud", base_url=""
+        )
+
+        assert resolved == "http://localhost:11434/v1"
+
+    def test_client_built_from_an_empty_base_url_uses_the_default(self, monkeypatch):
+        monkeypatch.setenv("LLM_API_KEY", "ollama-key")
+        client = StructuredAgentClient()
+        role_model = RoleModel(
+            role="news",
+            model="glm-5.3:cloud",
+            provider="ollama",
+            base_url="",
+            temperature=0.0,
+            max_tokens=100,
+        )
+
+        built = client._client_for(role_model)
+
+        assert str(built.base_url).rstrip("/") == "http://localhost:11434/v1"
+
 
 class TestResponseFormatFallback:
     def test_rejection_detection_matches_only_format_errors(self):
@@ -656,6 +683,11 @@ class TestResponseFormatFallback:
             "response_format error: unsupported temperature value",
             "response_format valid model unavailable",
             "response_format=json_schema accepted; temperature is unsupported",
+            # The failure is operational, not a format capability gap.
+            "json_schema is unsupported: insufficient credits",
+            "response_format is unsupported: missing API key",
+            # The real cause is named well after the negation.
+            "response_format is not supported for this request because max_tokens is invalid",
         ],
     )
     def test_another_parameter_as_subject_does_not_downgrade(self, message):
@@ -768,9 +800,17 @@ class TestResponseFormatFallback:
         )
 
         # The second endpoint accepted json_schema, so it must not be recorded as
-        # a fallback even though the first endpoint had one.
-        assert len(client._response_format_override) == 1
-        assert not any(second.base_url.rstrip("/") in key for key in client._response_format_override)
+        # a fallback even though the first endpoint had one. Assert the concrete
+        # keys: a substring check would pass vacuously because the cache key is
+        # "role:model:provider:endpoint" and the two endpoints differ only by suffix.
+        expected_first = (
+            f"news:{first.model}:{first.provider}:{first.base_url.rstrip('/')}"
+        )
+        expected_second = (
+            f"news:{second.model}:{second.provider}:{second.base_url.rstrip('/')}"
+        )
+        assert set(client._response_format_override) == {expected_first}
+        assert expected_second not in client._response_format_override
 
     def test_call_exposes_auditable_diagnostics(self, monkeypatch):
         """A fail-closed HOLD must be explainable from the recorded metadata."""
