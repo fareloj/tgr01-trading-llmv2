@@ -6,10 +6,20 @@ Apos corrigir uma incompatibilidade de calibracao que bloqueava 100% das ordens,
 uma campanha historica de 120 amostras foi executada na particao `development`
 para medir se o desenho atual consegue operar com margem liquida positiva.
 
-**Resultado: nao consegue, e a causa e aritmetica, nao de prompt.**
+**Resultado observado: nao conseguiu nesta amostra.** Todas as medias de margem
+liquida das acoes aprovadas foram negativas, e o custo configurado e maior que o
+movimento tipico do ativo no horizonte de decisao.
 
-O movimento tipico do BTC/BRL no horizonte de decisao e menor que o custo de
-transacao do proprio projeto. Nenhum ajuste de prompt resolve isso.
+O que este resultado sustenta: **para a politica atual, nesta particao e com
+estes custos, o edge bruto observado nao cobriu o custo de transacao.**
+
+O que ele NAO sustenta: uma afirmacao universal de que "nenhum prompt resolve".
+Uma unica particao `development`, com 24 janelas contextualmente relacionadas,
+nao exclui comportamento seletivo melhor, efeitos de prompt nao testados, ou
+defeitos ainda nao descobertos. A conclusao correta e mais estreita: o custo
+configurado excedeu o edge bruto desta amostra, e a diferenca e grande o
+suficiente para que qualquer proxima campanha precise tratar custo e horizonte
+como variavel primaria. Ver a secao "Proximo experimento" no fim.
 
 ## O que foi medido
 
@@ -33,8 +43,8 @@ converteu em HOLD.
 
 ### Margem liquida das acoes aprovadas
 
-A `directional_edge_after_cost_pct` ja desconta fee e slippage configurados
-(0.30%/lado).
+A `directional_edge_after_cost_pct` ja desconta o custo configurado por lado
+(fee 0.30% + slippage minimo 0.05% = 0.35% por lado; 0.70% no round-trip de BUY).
 
 | Horizonte | n | Media | Alinhadas | Contra o regime |
 |---:|---:|---:|---:|---:|
@@ -47,22 +57,39 @@ Todas as medias sao negativas. Ate as acoes alinhadas ao regime perdem dinheiro.
 
 ## A causa aritmetica
 
-O projeto cobra `PAPER_FEE_RATE=0.003` por lado. O hurdle efetivo e:
+Duas coisas diferentes aparecem no relatorio da campanha e precisam ser
+separadas, porque a primeira versao deste documento as misturou:
 
-- BUY: `0.9%` ida-e-volta (fee + slippage ATR-derivado)
-- SELL: `0.55%` saida
+**Custo de transacao** (`estimated_action_cost_pct`), configurado pelo projeto:
+fee `0.003` + slippage minimo `0.0005` por lado = 0.35%/lado.
+
+- BUY round-trip (2 lados): **0.70%**
+- SELL saida (1 lado): **0.35%**
+
+**Hurdle de classificacao** (`buy_round_trip_hurdle_pct`), que e o custo mais o
+`--threshold-pct` de 0.20% que a campanha usa para rotular bom/neutro/ruim:
+
+- BUY: `0.70 + 0.20` = **0.90%**
+- SELL: `0.35 + 0.20` = **0.55%**
+
+O threshold de 0.20% nao e um custo pago; e uma margem de indiferenca usada para
+classificar o resultado. Os 0.90% citados adiante sao o **hurdle de BUY**; SELL
+tem um hurdle menor (0.55%). A comparacao abaixo usa o hurdle de BUY para os dois
+lados, o que e conservador para SELL mas nao o representa com precisao.
 
 O movimento tipico do ativo, medido como a mediana do valor absoluto do
 movimento futuro (a mediana com sinal fica proxima de zero, como esperado):
 
-| Horizonte | \|movimento\| mediano | Atingem o hurdle de 0.9% |
-|---:|---:|---:|
-| 5m | 0.099% | 0/119 (0%) |
-| 15m | 0.159% | 3/119 (3%) |
-| 30m | 0.224% | 10/120 (8%) |
-| 60m | 0.470% | 25/120 (21%) |
+| Horizonte | \|movimento\| mediano | Atingem o custo de 0.70% | Atingem o hurdle de 0.90% |
+|---:|---:|---:|---:|
+| 5m | 0.099% | 0/119 (0%) | 0/119 (0%) |
+| 15m | 0.159% | 6/119 (5%) | 3/119 (3%) |
+| 30m | 0.224% | 16/120 (13%) | 10/120 (8%) |
+| 60m | 0.470% | 38/120 (32%) | 25/120 (21%) |
 
-No melhor caso (60m), o hurdle e **1.9x** o movimento tipico. Em 5m, e 9x.
+No melhor caso (60m), o custo de BUY e **1.5x** o movimento tipico (0.70/0.470);
+contra o hurdle completo de 0.90%, e **1.9x**. Em 5m, o custo e 7x o movimento
+tipico.
 
 ## Poder preditivo dos indicadores
 
@@ -78,10 +105,13 @@ Testado contra o movimento futuro real das mesmas linhas:
 Baseline aleatorio = 50%. O MACD tem um sinal fraco em 15m (58.5%) que
 desaparece em 60m (50.0%). As amostras de RSI sao poucas demais para concluir.
 
-**Mesmo o melhor caso nao paga o custo.** Com 58.5% de acerto e movimento
-tipico de 0.159% em 15m, o ganho bruto esperado e
-`(0.585 - 0.415) * 0.159 = 0.027%`, contra um hurdle de 0.9%. O edge disponivel
-e ~3% do custo necessario.
+**Estimativa de ordem de grandeza, nao de retorno esperado.** Se cada acerto e
+erro valesse a mediana do movimento absoluto, o ganho bruto esperado em 15m seria
+`(0.585 - 0.415) * 0.159 = 0.027%`, contra um custo de 0.70% (e um hurdle de
+0.90%). Este calculo **superestima** o resultado, porque assume que a magnitude
+media dos acertos e dos erros e igual; se os erros tiverem magnitude maior (o
+padrao tipico), o resultado real e pior. Ele serve apenas para mostrar que a
+diferenca e de ordens de grandeza, nao para estimar lucro ou perda.
 
 ## Interpretacao
 
@@ -89,24 +119,49 @@ e ~3% do custo necessario.
    o que foi desenhado: falha fechado, audita, e nao inventa maturacao.
 2. A tese original ("um LLM interpretando evidencia ja calculada, com o codigo
    controlando risco") permanece testavel, mas o **horizonte de minutos e
-   incompativel com a taxa de 0.30%/lado**.
-3. A taxa de 0.30%/lado e uma premissa configuravel do projeto
-   (`PAPER_FEE_RATE`), nao uma medicao feita nesta sessao. Se a taxa real de
-   execucao for menor, o hurdle cai na mesma proporcao e a conclusao deve ser
-   recalculada; ela nao foi verificada contra a tabela de fees da exchange.
+   incompativel com o custo de 0.35%/lado assumido nesta amostra**.
+3. O custo de 0.35%/lado (fee 0.30% + slippage minimo 0.05%) e uma premissa
+   configuravel do projeto (`PAPER_FEE_RATE`, `PAPER_MIN_SLIPPAGE_RATE`), nao uma
+   medicao feita nesta sessao. Se o custo real de execucao for menor, tudo cai na
+   mesma proporcao e a conclusao deve ser recalculada; ele nao foi verificado
+   contra a tabela de fees da exchange. Ver "Proximo experimento".
 
-## O que mudar para ter uma chance
+## Proximo experimento
 
-Nenhuma destas e uma correcao de bug; todas sao decisoes de escopo que exigem
-sign-off do operador:
+**Decisao pendente do operador, nao do agente.** Antes de rodar uma campanha
+maior, uma destas alavancas precisa entrar no escopo, porque a proxima campanha
+com o desenho atual reproduzira este resultado com mais amostras e o mesmo custo.
+
+Verificacao que deve vir PRIMEIRO, porque e barata e determina se o problema e
+real: **confirmar a taxa efetiva da conta**. `PAPER_FEE_RATE=0.003` e uma
+premissa do arquivo de configuracao, nao uma medicao. O validador de dry-run ja
+le as fees reais da exchange (`backend/execution/mb_order_dry_run.py`); se a taxa
+real for menor, o custo cai proporcionalmente e a leitura inteira muda.
+
+Experimento proposto para a proxima campanha, se a taxa se confirmar alta:
+
+- **Hipotese:** com horizonte de 4h ou 24h, o movimento tipico excede o custo de
+  transacao com margem suficiente para um edge liquido positivo.
+- **Escopo:** somente particao `development`. `validation` e `holdout` permanecem
+  intocados. Prompts, thresholds do Risk Manager e regras de risco ficam
+  congelados; nenhuma alteracao de codigo durante a coleta.
+- **Metrica de aceitacao, pre-registrada:** `directional_edge_after_cost_pct`
+  medio positivo com intervalo de confianca block-bootstrap que nao cruze zero,
+  em pelo menos 2 dos 3 regimes, com no minimo 30 acoes direcionais aprovadas.
+- **Criterio de falha:** se a media continuar negativa, o desenho de horizonte
+  curto esta encerrado como evidencia e o proximo passo vira a alavanca 2
+  (operar raramente, apenas quando o movimento esperado exceder varias vezes o
+  custo) ou uma mudanca de escopo maior.
+
+Alavancas disponiveis, em ordem de custo de implementacao:
 
 1. **Horizonte maior.** Operar em horas/dias, onde o movimento tipico supera o
-   custo. Um movimento de 3-5% paga 0.9% com folga; um de 0.16% nunca paga.
-2. **Operar raramente.** Aceitar que a maior parte do tempo a resposta correta e
-   HOLD e so agir quando o movimento esperado exceder varias vezes o hurdle.
-   O gate de custo ja existe conceitualmente (`directional_edge_after_cost_pct`),
-   mas o LLM nao o recebe no payload para calibrar conviccao.
-3. **Reduzir custo.** Inviavel dentro do escopo atual; a taxa e do exchange.
+   custo. Um movimento de 3-5% paga 0.70% com folga; um de 0.16% nunca paga.
+2. **Operar raramente.** Fornecer o hurdle de custo ao LLM no payload para que ele
+   calibre conviccao contra ele, e so agir quando o movimento esperado exceder
+   varias vezes o custo. O gate ja existe (`directional_edge_after_cost_pct`), mas
+   o LLM nao o recebe hoje.
+3. **Confirmar custo.** Verificar a taxa real antes de qualquer conclusao.
 4. **Avaliar saidas, nao entradas.** O red team de 2026-08-01 ja apontava que
    "o principal trabalho restante e qualidade direcional em regimes bearish,
    avaliacao de saidas e maturacao estatistica".
@@ -122,10 +177,3 @@ sign-off do operador:
   observacoes independentes.
 - Nao ha claim de lucro nem de perda em producao: isto e uma avaliacao
   retrospectiva em condicoes conhecidas.
-
-## Proximo passo recomendado
-
-Nao ajustar prompts para "melhorar acerto". O gargalo e o custo contra o
-horizonte. Antes de qualquer campanha maior, decidir explicitamente qual das
-alavancas acima entra no escopo; caso contrario a proxima campanha reproduzira
-este mesmo resultado com mais amostras e o mesmo custo.
