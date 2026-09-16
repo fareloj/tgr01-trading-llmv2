@@ -517,6 +517,14 @@ class DecisionAgent:
         O campo reasoning deve ser curto, com no maximo 20 palavras.
         conviction deve ser um destes valores: 0, 30, 50, 60, 70 ou 80. Nunca retorne conviction acima de 80.
         Use 80 somente quando sinais tecnicos independentes estao fortemente alinhados; incerteza ou conflito exige 60 ou menos.
+        Regra de executabilidade: o Risk Manager exige conviction >= 70 para aprovar BUY ou SELL.
+        Portanto, quando voce julgar que um setup direcional e forte e coerente, use 70 ou 80,
+        nao 60. Use 60 apenas quando a direcao for plausivel mas houver contra-evidencia material,
+        contexto degradado ou noticia stale -- e saiba que nesse caso a proposta sera registrada
+        como nao executavel. Nao infle a conviction para forcar aprovacao: se o setup nao sustenta
+        70, retorne HOLD em vez de uma proposta direcional que nao sera aprovada.
+        Consistencia obrigatoria: se action e BUY ou SELL com conviction 60, ou se data_health.is_news_stale
+        for true com conviction > 60, explique no decision_brief que a proposta nao e executavel.
         O campo decision_brief deve ter EXATAMENTE 3 linhas curtas:
         Acao: explique por que escolheu BUY, SELL ou HOLD.
         Base tecnica: preco=<price>, RSI=<rsi_value> <rsi_status>, MACD=<macd_hist> <macd_status>, Bollinger=<bb_status>, EMA=<ema_status>, VolSpike=<is_volume_spike>
