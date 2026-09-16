@@ -15,10 +15,32 @@ test("toFiniteNumber treats null, blank and boolean as absent, not zero", () => 
   assert.equal(toFiniteNumber(null), null);
   assert.equal(toFiniteNumber(undefined), null);
   assert.equal(toFiniteNumber(""), null);
+  assert.equal(toFiniteNumber(" "), null);
   assert.equal(toFiniteNumber("abc"), null);
   assert.equal(toFiniteNumber(true), null);
+  assert.equal(toFiniteNumber(Symbol("x")), null);
+  assert.equal(toFiniteNumber(NaN), null);
+  assert.equal(toFiniteNumber(Infinity), null);
   assert.equal(toFiniteNumber(0), 0);
   assert.equal(toFiniteNumber("0.35"), 0.35);
+  assert.equal(toFiniteNumber(-1), -1);
+});
+
+test("helpers accept null config instead of throwing", () => {
+  assert.deepEqual(costHurdles(null), { oneSidePct: null, buyPct: null, sellPct: null });
+  assert.deepEqual(convictionOutlook(null, true), { required: null, source: "unknown" });
+  assert.deepEqual(describeModelRoles(null), []);
+  assert.deepEqual(summarizeDecisions(null).total, 0);
+  assert.equal(hurdleCoverage(0.47, null).ratio, null);
+});
+
+test("hurdleCoverage reports unknown for an extreme ratio instead of covered", () => {
+  // A finite ratio check matters: MAX_VALUE / MIN_VALUE is Infinity, which must
+  // not be reported as "covers the cost".
+  const result = hurdleCoverage(Number.MAX_VALUE, Number.MIN_VALUE);
+
+  assert.equal(result.ratio, null);
+  assert.equal(result.covered, null);
 });
 
 test("formatPercent never prints NaN and keeps zero", () => {
@@ -133,6 +155,9 @@ test("convictionOutlook raises the bar when news is unavailable", () => {
 
 test("convictionOutlook reports unknown rather than inventing a threshold", () => {
   assert.deepEqual(convictionOutlook({}, true), { required: null, source: "unknown" });
+  // An unknown news state must not fall back to the lower bar.
+  const gates = { minimum_conviction_pct: 70, no_news_minimum_conviction_pct: 80 };
+  assert.deepEqual(convictionOutlook(gates, null), { required: null, source: "unknown" });
 });
 
 test("describeModelRoles lists the three roles in order without credentials", () => {

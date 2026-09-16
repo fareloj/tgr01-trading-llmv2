@@ -102,44 +102,58 @@ function HorizonCell({ result, blocked }) {
 }
 
 function CostRealityPanel({ state, logs }) {
+  const configError = state.execution_config?.error;
   const hurdles = costHurdles(state.execution_config);
   const summary = summarizeDecisions(logs);
   const roles = describeModelRoles(state.model_roles);
   const gates = state.risk_gates || {};
   const latest = state.logs?.[0] || {};
-  // The no-news gate applies when the snapshot carried no news context at all.
-  const newsAvailable = !latest.snapshot?.data_health?.is_news_stale;
+  // The Risk Manager's higher conviction floor triggers on an EMPTY
+  // news_context, not on is_news_stale (risk_manager.evaluate_order checks
+  // len(news_context) == 0). The snapshot exposes the rows it fed the gate as
+  // recent_news, so the gate is inferred from that alone. When the snapshot is
+  // absent we report "unknown" rather than guessing a threshold.
+  const recentNews = latest.snapshot?.recent_news;
+  const newsAvailable = Array.isArray(recentNews) ? recentNews.length > 0 : null;
   const outlook = convictionOutlook(gates, newsAvailable);
   const coverage = hurdleCoverage(0.47, hurdles.buyPct);
+  const feeRate = state.execution_config?.fee_rate;
+  const minSlippage = state.execution_config?.min_slippage_rate;
 
   return <section className="panel cost-panel" id="cost-reality">
     <div className="panel-heading">
       <h2><Gauge size={15} />Cost Reality</h2>
-      <span>{hurdles.buyPct == null ? "custo desconhecido" : `BUY ${formatPercent(hurdles.buyPct)} round-trip`}</span>
+      <span>{configError ? "custo indisponivel" : hurdles.buyPct == null ? "custo desconhecido" : `BUY ${formatPercent(hurdles.buyPct)} round-trip`}</span>
     </div>
+
+    {configError && <div className="error-banner">Configuracao de custo invalida: {configError}. Nenhum valor de custo e exibido.</div>}
 
     <div className="cost-grid">
       <div className="cost-block">
         <small>Custo configurado por lado</small>
         <strong>{formatPercent(hurdles.oneSidePct)}</strong>
         <p>BUY round-trip <b>{formatPercent(hurdles.buyPct)}</b> · SELL exit <b>{formatPercent(hurdles.sellPct)}</b></p>
-        <em>fee {formatPercent((state.execution_config?.fee_rate || 0) * 100, 3)} + slippage min {formatPercent((state.execution_config?.min_slippage_rate || 0) * 100, 3)}</em>
+        <em>{feeRate == null || minSlippage == null
+          ? "fee/slippage nao disponiveis"
+          : `fee ${formatPercent(feeRate * 100, 3)} + slippage min ${formatPercent(minSlippage * 100, 3)}`}</em>
       </div>
 
       <div className="cost-block">
         <small>Movimento tipico 60m vs custo BUY</small>
-        <strong className={coverage.covered === false ? "bad" : "good"}>
+        <strong className={coverage.covered == null ? "" : coverage.covered ? "good" : "bad"}>
           {coverage.ratio == null ? "--" : `${coverage.ratio.toFixed(2)}x`}
         </strong>
         <p>0.47% tipico / {formatPercent(hurdles.buyPct)} de custo</p>
-        <em>{coverage.covered === false ? "o movimento tipico nao cobre o custo" : "cobre o custo"}</em>
+        <em>{coverage.covered == null
+          ? "cobertura desconhecida: custo indisponivel"
+          : coverage.covered ? "cobre o custo" : "o movimento tipico nao cobre o custo"}</em>
       </div>
 
       <div className="cost-block">
         <small>Conviccao minima para executar</small>
         <strong>{outlook.required == null ? "--" : `${outlook.required}%`}</strong>
-        <p>{outlook.source === "no_news" ? "sem noticias frescas" : "gate padrao do Risk Manager"}</p>
-        <em>hibrida minima {gates.minimum_hybrid_confidence_pct ?? "--"}% · drawdown {formatPercent(gates.max_daily_drawdown_pct)}</em>
+        <p>{outlook.source === "unknown" ? "snapshot indisponivel" : outlook.source === "no_news" ? "sem noticias no payload" : "gate padrao do Risk Manager"}</p>
+        <em>hibrida minima {formatPercent(gates.minimum_hybrid_confidence_pct)} · drawdown {formatPercent(gates.max_daily_drawdown_pct)}</em>
       </div>
 
       <div className="cost-block">

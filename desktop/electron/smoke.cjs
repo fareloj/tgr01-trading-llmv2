@@ -60,7 +60,7 @@ const smokeState = {
     final_confidence: 0.6,
     execution_price: 400000,
     reasoning: "Smoke HOLD",
-    snapshot: { technical: {}, data_health: {}, news_risk: { risk_level: "NORMAL" } }
+    snapshot: { technical: {}, data_health: {}, news_risk: { risk_level: "NORMAL" }, recent_news: [{ headline: "smoke" }] }
   }, {
     id: 2,
     timestamp: 1779999970,
@@ -69,7 +69,7 @@ const smokeState = {
     llm_conviction: 60,
     execution_price: 400000,
     reasoning: "Conviccao bruta da IA insuficiente (60%). Exige-se minimo de 70%.",
-    snapshot: { technical: {}, data_health: {}, news_risk: { risk_level: "NORMAL" } }
+    snapshot: { technical: {}, data_health: {}, news_risk: { risk_level: "NORMAL" }, recent_news: [{ headline: "smoke" }] }
   }],
   entry_evaluation: {
     entries: [
@@ -162,6 +162,10 @@ async function runSmokeTest() {
     const costStrongValues = [...costPanel.querySelectorAll('.cost-block strong')].map(node => node.textContent.trim());
     const hasConvictionGate = costStrongValues.includes('70%');
     const hasDecisionModel = costText.includes('kimi-k2.7-code:cloud');
+    // A configuration error must be visible and must not render a fabricated
+    // 0.00% cost.
+    const hasConfigErrorBanner = costPanel.querySelectorAll('.error-banner').length > 0;
+    const showsFabricatedZeroCost = costStrongValues.includes('0.00%');
 
     return {
       navButtons: document.querySelectorAll('nav button').length,
@@ -182,6 +186,8 @@ async function runSmokeTest() {
       hasPerSideCost,
       hasConvictionGate,
       hasDecisionModel,
+      hasConfigErrorBanner,
+      showsFabricatedZeroCost,
       previewBannerVisible: Boolean(document.querySelector('.preview-banner')),
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: document.documentElement.clientWidth
@@ -225,6 +231,8 @@ async function runSmokeTest() {
   if (!result.hasPerSideCost) failures.push("cost panel did not show the per-side cost");
   if (!result.hasConvictionGate) failures.push("cost panel did not show the conviction gate");
   if (!result.hasDecisionModel) failures.push("cost panel did not show the decision model");
+  if (result.hasConfigErrorBanner) failures.push("cost panel showed a config error banner with a valid config");
+  if (result.showsFabricatedZeroCost) failures.push("cost panel fabricated a 0.00% cost");
   if (result.documentWidth > result.viewportWidth + 2) failures.push(`horizontal overflow ${result.documentWidth}/${result.viewportWidth}`);
   if (!invokedActions.includes("diagnostics")) failures.push("diagnostics IPC was not invoked");
   if (rendererErrors.length) failures.push(`renderer errors: ${rendererErrors.join(" | ")}`);

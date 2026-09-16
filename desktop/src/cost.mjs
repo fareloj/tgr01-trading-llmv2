@@ -7,13 +7,16 @@
  */
 
 /**
- * Coerce to a finite number, treating null, undefined, "" and non-numeric
- * strings as absent rather than as zero. `Number(null)` is 0, which would
- * silently turn a missing total into a zero-cost hurdle.
+ * Coerce to a finite number, treating null, undefined, blank strings, booleans
+ * and symbols as absent rather than as zero. `Number(null)` is 0 and
+ * `Number(" ")` is 0, which would silently turn a missing value into a zero-cost
+ * hurdle; `Number(Symbol())` throws.
  */
 export function toFiniteNumber(value) {
-  if (value == null || value === "") return null;
-  if (typeof value === "boolean") return null;
+  if (value == null) return null;
+  const kind = typeof value;
+  if (kind === "boolean" || kind === "symbol") return null;
+  if (kind === "string" && value.trim() === "") return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
 }
@@ -34,12 +37,13 @@ export function formatPercent(value, digits = 2) {
  * this system reduces an existing long rather than opening a short.
  */
 export function costHurdles(executionConfig = {}) {
-  const oneSide = toFiniteNumber(executionConfig.one_side_cost_pct);
+  const source = executionConfig && typeof executionConfig === "object" ? executionConfig : {};
+  const oneSide = toFiniteNumber(source.one_side_cost_pct);
   if (oneSide == null) {
     return { oneSidePct: null, buyPct: null, sellPct: null };
   }
-  const buy = toFiniteNumber(executionConfig.buy_round_trip_cost_pct);
-  const sell = toFiniteNumber(executionConfig.sell_exit_cost_pct);
+  const buy = toFiniteNumber(source.buy_round_trip_cost_pct);
+  const sell = toFiniteNumber(source.sell_exit_cost_pct);
   return {
     oneSidePct: oneSide,
     buyPct: buy == null ? oneSide * 2 : buy,
@@ -59,6 +63,10 @@ export function hurdleCoverage(medianMovePct, hurdlePct) {
     return { ratio: null, covered: null };
   }
   const ratio = move / hurdle;
+  // A non-finite ratio carries no information about coverage; report unknown.
+  if (!Number.isFinite(ratio)) {
+    return { ratio: null, covered: null };
+  }
   return { ratio, covered: ratio >= 1 };
 }
 
@@ -96,10 +104,18 @@ export function summarizeDecisions(logs = []) {
  * Describe the conviction the model must reach for its proposal to be
  * executable, so the operator can see the gate the prompt is calibrated against.
  */
+/**
+ * Describe the conviction the model must reach for its proposal to be
+ * executable. `newsAvailable` is true/false when the snapshot shows the news
+ * rows the gate consumed, and null when that is unknown; null must report
+ * "unknown" rather than silently assuming the lower bar.
+ */
 export function convictionOutlook(riskGates = {}, newsAvailable = true) {
-  const base = toFiniteNumber(riskGates.minimum_conviction_pct);
-  const noNews = toFiniteNumber(riskGates.no_news_minimum_conviction_pct);
+  const source = riskGates && typeof riskGates === "object" ? riskGates : {};
+  const base = toFiniteNumber(source.minimum_conviction_pct);
+  const noNews = toFiniteNumber(source.no_news_minimum_conviction_pct);
   if (base == null) return { required: null, source: "unknown" };
+  if (newsAvailable == null) return { required: null, source: "unknown" };
   if (!newsAvailable && noNews != null && noNews > base) {
     return { required: noNews, source: "no_news" };
   }
@@ -110,7 +126,8 @@ export function convictionOutlook(riskGates = {}, newsAvailable = true) {
  * Build a compact, non-secret description of the resolved role models.
  */
 export function describeModelRoles(modelRoles = {}) {
-  const roles = modelRoles.roles || {};
+  const source = modelRoles && typeof modelRoles === "object" ? modelRoles : {};
+  const roles = source.roles && typeof source.roles === "object" ? source.roles : {};
   const order = ["news", "technical", "decision"];
   return order
     .filter(role => roles[role])

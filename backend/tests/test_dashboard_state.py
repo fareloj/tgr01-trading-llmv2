@@ -1,5 +1,6 @@
 import json
 import time
+from pathlib import Path
 
 from backend.core import database
 from backend.core.db_models import (
@@ -257,6 +258,21 @@ def test_exposed_conviction_constants_match_the_risk_manager_class():
         gates["no_news_minimum_conviction_pct"]
         == dashboard_state.RiskManager.NO_NEWS_MINIMUM_CONVICTION
     )
+
+
+def test_live_exposure_is_not_environment_configurable():
+    """Raising the exposure ceiling must require a reviewed diff, not an env var.
+
+    The console is read-only, but the ceiling it displays is a Risk Manager gate.
+    If it were env-configurable, a value change could weaken that gate without a
+    code review, contrary to the repository's sign-off rule.
+    """
+    import backend.core.market_policy as policy
+
+    source = Path(policy.__file__).read_text(encoding="utf-8")
+    assert 'os.getenv("LIVE_MAX_EXPOSURE_PCT"' not in source
+    assert "LIVE_MAX_EXPOSURE_PCT = 80.0" in source
+    assert policy.LIVE_MAX_EXPOSURE_PCT <= policy._REVIEWED_MAX_EXPOSURE_CEILING
 
 
 def test_execution_config_fails_closed_on_a_malformed_rate(monkeypatch):
