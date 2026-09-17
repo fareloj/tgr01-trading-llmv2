@@ -99,6 +99,39 @@ can make the model spend the whole budget on hidden reasoning and return an
 **empty body**. Measure the contract first, as recorded in
 `backend/agents/model_config.py`.
 
+## Observed model behaviour (measured here)
+
+Treat these as field notes to re-check, not permanent truths. Model behaviour
+changes between versions.
+
+- **`gpt-5.6-luna`** honours `--variant` and the effort is real, not cosmetic.
+  Reasoning tokens measured on the same prompt: `none` = 0, `low` = 86,
+  `high` = 121, `xhigh` = 112, `max` = 210. The counts vary run to run and are not
+  strictly monotonic (`high` exceeded `xhigh` in that run), so do not assume a
+  clean ordering - the reliable signal is that `none` is near zero and the higher
+  levels spend far more. Its variants are
+  `{none, low, medium, high, xhigh, max}`; there is **no** `minimal`.
+- **`--variant` value validation is unreliable.** `--variant bogus` was accepted
+  with no error and behaved like no override in the runs observed here. So a value
+  can fail **silently** rather than loudly: a measurement attributed to a variant
+  may really be the default. The safe rule stands - confirm the variant exists for
+  that model first (`opencode models --verbose`) and verify the effect rather than
+  trusting the flag; do not generalize "always silent" from one observation.
+- **`glm-5.3-flash`** exposes `{low, high, max}` and is a solid, cheap review
+  model. At `low` it returns usable output fast; `high` is worth it for a real
+  audit. It respects `-m` on a short prompt.
+- **`union-alpha`** exposes no variants; do not pass `--variant` to it. It gave
+  the sharpest counterexamples of any reviewer here (it caught boolean/array
+  coercion producing a fabricated `0`, and an object-valued status that would
+  throw in React), but it is also the slowest and the most likely to exceed a
+  long timeout.
+- **`kimi-k2.7-code`** exposes no variants and needs a larger token budget
+  (8000 measured better than 5000). Do not set an effort override on it.
+- **A model can be right and wrong in the same session.** GLM 5.3 Flash produced
+  one bogus finding (a `minimal` variant that does not exist) alongside correct
+  ones, and twice misread a rendering artifact as content. Verify every finding
+  against the real file before acting on it.
+
 ## Session continuity (validated end to end)
 
 ### OpenCode - create, capture id, resume
@@ -150,6 +183,67 @@ PowerShell 5.1 also writes a UTF-8 BOM with `Out-File`/`Set-Content -Encoding
 utf8`, and a BOM makes the attached file read as **binary** and fail the
 attachment. Write files with `[System.IO.File]::WriteAllText($path, $text,
 (New-Object System.Text.UTF8Encoding($false)))` to omit the BOM.
+
+## A "read-only" reviewer is not actually read-only
+
+Observed in this repository. Instructing a model to review and not to edit does
+**not** make it read-only:
+
+- A reviewer **edited the file it was reviewing** (the README): `git status`
+  showed `MM`, and the changes were real working-tree edits.
+- A reviewer ran `git checkout -- <file>` and `Remove-Item`, discarding an
+  uncommitted artifact. `git checkout --` is denied in *this* session's
+  `opencode.json`, but the reviewer is a separate process and did not inherit
+  that denial.
+
+Consequences and rules:
+
+1. **Always pass a worktree or a read-only sandbox**, never the main checkout, to
+   an agent whose job is review. A prompt is not an enforcement boundary.
+2. **Do not leave work unguarded while a reviewer runs.** This does **not** mean
+   commit early, and it must never be read as bypassing the mandatory pre-commit
+   double review. Options that do not skip the gate: run the reviewer against a
+   **separate worktree**, `git stash` the work, or take a copy. The pre-commit
+   gate still runs against the final diff before any commit is created.
+3. **Diff both staged and unstaged after every review.** Check
+   `git diff` **and** `git diff --cached`. If a reviewer edits a file that is
+   already staged, the working tree diverges from the index: `git diff --cached`
+   alone still shows the pre-edit staged version and looks clean, and only
+   `git diff` reveals the post-staging edit. A reviewer's "I did not edit
+   anything" is not evidence; the diff is.
+4. If a reviewer did edit, treat its edits as **unreviewed changes** and re-review
+   them like any other code.
+
+## Reviewer cost and timeout budget
+
+- A large review prompt can run for a long time. GLM 5.3 Flash at `--variant high`
+  finished multi-file audits; Union Alpha timed out at the 30-minute mark on a
+  full-README audit even though it had already written most of its findings.
+- **Scope reviews tightly.** Ask for the specific hunks and the specific claims,
+  not "review this file". A short scoped prompt returns in a fraction of the time.
+- **Recover the session instead of rerunning.** Every run is persisted, so read
+  the result back rather than paying for the work twice:
+
+  ```powershell
+  $exp = opencode export <sessionID> 2>&1 | Out-String
+  ```
+
+  The parts contain the tool calls and the final text. This preserves the review
+  even when the CLI call itself timed out.
+
+## Prompting for a useful review
+
+A vague "review this" returns generic praise. Ask for what you actually need:
+
+- Give the exact diff and the exact scope, and say what to ignore.
+- Demand evidence: `file:line`, or a command with its real output. Reject
+  findings that cannot be reproduced.
+- Ask explicitly whether a claim is `CONFIRMED` (reproduced), `PLAUSIBLE`
+  (evidence but not reproduced) or `REFUTED`, and require a final one-line
+  verdict so the gate is unambiguous.
+- Ask it to hunt for the repo's documented defect class, not generalities:
+  "unknown safety data rendered as a benign value" has recurred here many times.
+- Tell it what to *stop* doing: no `git checkout`, no `git restore`, no deletions.
 
 ### Claude Code - create, capture id, resume
 
@@ -308,6 +402,32 @@ Never accept a result on trust. Read the diff, judge the technical decisions,
 run the tests yourself, check for regressions and out-of-scope edits, and confirm
 the tests actually assert behaviour. Look for solutions more complex than the
 problem. Reproduce before you believe.
+
+Never trust "I ran the tests and they pass" either. A reviewer in a restricted
+sandbox may be unable to run anything and then report the failure as if the
+environment were broken. Run the command yourself and cite the real count.
+
+## Fixtures lie, live data does not
+
+The single highest-value bug found in this repository's UI work came from running
+the **real** app against **live** data, not from the test suite. A panel rendered
+blank with a React error because a field the fixture hardcoded as an empty object
+is an object `{value, status}` in the live payload. The smoke test passed, the
+unit tests passed, and the bug shipped anyway, because every fixture used the
+wrong shape.
+
+Rules that follow:
+
+- When you build a fixture, take the shape from the **producer**, not from your
+  expectation. For this repo, read the real payload
+  (`& ".\.venv\Scripts\python.exe" backend\tests\dashboard_state.py`) and copy a
+  real field.
+- When a UI or a parser looks fine in tests, still exercise it once against live
+  state before calling it done.
+- A rendering crash that blanks a whole surface is a real defect even when no test
+  asserts it. Absence of a failing test is not evidence of correctness.
+- Screenshots for documentation are a genuine integration test. Capturing the
+  real console surfaced a live-only crash that four passing test suites missed.
 
 ## Handing off context
 
