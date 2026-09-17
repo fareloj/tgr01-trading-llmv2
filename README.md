@@ -31,9 +31,9 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Latest backend validation | 438 Python tests passing |
 | Latest desktop validation | 35 Node tests, Vite build, and Electron smoke passing |
 
-These test counts describe the state recorded on 2026-09-16. They validate
-contracts, failure behavior, accounting, and interfaces. They do not measure
-future returns.
+These test counts describe the state recorded on 2026-09-16 and revalidated on
+2026-09-17. They validate contracts, failure behavior, accounting, and
+interfaces. They do not measure future returns.
 
 The current configuration is a **paper-only experiment**. The Decision Agent
 uses Kimi K2.7 Code as the final proposal, while GLM 5.3 handles the News and
@@ -47,7 +47,14 @@ The accepted paper-only boundary and known limitations are documented in
 [Final Acceptance](docs/reports/FINAL_ACCEPTANCE.md). The August operational adversarial review is in
 [Operational Red Team](docs/reports/RED_TEAM_REPORT_2026-08-01.md); subsequent
 review passes and corrections are recorded in the
-[September handoff](docs/reports/SESSION_HANDOFF_2026-09-16.md).
+[September handoff](docs/reports/SESSION_HANDOFF_2026-09-16.md), which is a dated
+record and is superseded on the partition status by the closure record below.
+
+The consolidated closing record is in
+[Project Closure](docs/reports/PROJECT_CLOSURE_2026-09-17.md). It lists the
+commands that were rerun, the current state of the evaluation partitions, and the
+three open Risk Manager findings with their measured reachability. Those findings
+are **open, not fixed**, and touching them requires operator sign-off.
 
 ## Interfaces
 
@@ -105,8 +112,12 @@ Mercado Bitcoin public API        RSS news sources
 
 The LLM does not calculate indicators, edit balances, choose arbitrary code,
 or submit an exchange order. Its structured response is validated with
-Pydantic. An API error, malformed output, missing key, stale market, or invalid
-numeric value fails to `HOLD` or aborts before the model is called.
+Pydantic. Across the pre-LLM checks and the Decision Agent stage, an API error,
+malformed output, missing key, stale market, or invalid numeric value fails to
+`HOLD` or aborts the cycle. That is before the Risk Manager; it is not a claim
+that every malformed payload is handled gracefully in the Risk Manager, where
+three open shape defects are documented in the [closure
+record](docs/reports/PROJECT_CLOSURE_2026-09-17.md).
 
 ## Deterministic Safety Boundary
 
@@ -307,11 +318,13 @@ round-trip, while the median absolute 60-minute move in that sample was `0.470%`
 The MACD the model received predicted the 60-minute direction at chance.
 
 Read the scope before generalizing: 120 rows over 24 overlapping windows in a
-single partition with synthetic news is **not** a walk-forward result. The
-`validation` partition and the sealed `holdout` were never touched. The finding
-supports "at this horizon and these costs the gross edge did not cover the cost",
-not a universal claim. See [Edge and Cost Diagnostic](docs/reports/EDGE_AND_COST_DIAGNOSTIC_2026-09-16.md)
-and the [session handoff](docs/reports/SESSION_HANDOFF_2026-09-16.md).
+single partition with synthetic news is **not** a walk-forward result. This
+campaign used only `development`. The `validation` partition was already used by
+the 2026-08-10 multi-agent campaign and is not untouched; only the sealed
+`holdout` has never been evaluated. The finding supports "at this horizon and
+these costs the gross edge did not cover the cost", not a universal claim. See
+[Edge and Cost Diagnostic](docs/reports/EDGE_AND_COST_DIAGNOSTIC_2026-09-16.md)
+and the [project closure](docs/reports/PROJECT_CLOSURE_2026-09-17.md).
 
 ## LLM Analysis Tools
 
@@ -577,6 +590,11 @@ dependencies are ignored by Git.
   horizon on the `development` partition, and the configured round-trip cost
   exceeded the median absolute 60-minute move. That result is one partition with
   overlapping windows and synthetic news, not a walk-forward proof.
+- Three pre-existing Risk Manager findings were reproduced on 2026-09-17 and left
+  open by operator decision: the hybrid-confidence floor is inclusive at exactly
+  `0.50`, a `technical_context` without `rsi`/`macd` passes the directional gate,
+  and a malformed payload raises instead of returning `HOLD`. Reachability is
+  measured in the [closure record](docs/reports/PROJECT_CLOSURE_2026-09-17.md).
 - The configured fee (`PAPER_FEE_RATE=0.003`) is a configuration premise, not a
   measurement of the real account fee. It has not been confirmed against the
   exchange fee table.

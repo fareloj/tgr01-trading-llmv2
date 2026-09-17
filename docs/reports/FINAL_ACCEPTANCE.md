@@ -1,6 +1,7 @@
 # Aceitacao Final - Escopo Paper Trading
 
 Data da aceitacao: 2026-08-01
+Revalidada em: 2026-09-17
 
 ## Veredito
 
@@ -8,22 +9,33 @@ O TGR-01 Trading LLM V2 esta aceito para pesquisa local e paper trading
 auditavel. O projeto nao implementa, habilita ou simula um endpoint privado de
 ordens reais. Qualquer transicao para capital real e um projeto separado.
 
+A revalidacao de 2026-09-17 refez as contagens e executou os comandos de
+verificacao. O resultado consolidado, incluindo as divergencias encontradas
+nesta propria pagina, esta em `PROJECT_CLOSURE_2026-09-17.md`. O veredito de
+escopo acima permanece o mesmo; o que mudou foi o estado numerico do projeto.
+
 ## Evidencias Reproduziveis
 
 - PostgreSQL 16 e o unico banco do caminho ativo.
 - Banco pytest isolado do banco da aplicacao e protegido contra duas suites
   simultaneas por advisory lock.
-- Suite Python: 209 testes aprovados, incluindo fronteira neural fail-closed e
-  smoke test real da TUI.
-- Desktop: 6 testes Node, build Vite e smoke Electron aprovados; 17 acoes
+- Suite Python: 209 testes aprovados na aceitacao original; **438 aprovados na
+  revalidacao de 2026-09-17**, incluindo fronteira neural fail-closed e smoke
+  test real da TUI.
+- Desktop: 6 testes Node na aceitacao original; **35 na revalidacao de
+  2026-09-17**, com build Vite e smoke Electron aprovados, exit code 0; 17 acoes
   operacionais cobertas e nenhum erro de renderer ou overflow horizontal.
-- Auditoria npm: zero vulnerabilidades conhecidas.
-- Backend compilado com `python -m compileall`.
+- Auditoria npm: zero vulnerabilidades conhecidas. Na revalidacao,
+  `npm audit --omit=dev` continua em zero; `npm audit` completo lista 6 avisos
+  restritos a devDependencies (ver `PROJECT_CLOSURE_2026-09-17.md`).
+- Backend compilado com `compileall` (via venv na revalidacao de 2026-09-17).
 - Interface Electron/Vite compilada para producao.
 - Dump PostgreSQL mais recente validado por `pg_restore --list`: formato
   custom, 78 entradas de catalogo e dados.
 - RAG oficial (servico Docker separado): 800 chunks densos e 800 lexicais, HNSW carregado e reranker em
-  CUDA.
+  CUDA. Este numero descreve a aceitacao do repositorio RAG, nao uma execucao
+  neste ambiente; em 2026-09-17 o servico nao estava em execucao e o cliente
+  reportou `unavailable`.
 - Matriz adversarial do LLM: qualidade direcional 7/7 e seguranca 7/7.
 - TCN multi-task avaliada em teste temporal reservado e exposta somente por um
   advisor `RESEARCH_ONLY`, sem capacidade de autorizar ordens.
@@ -78,18 +90,38 @@ ordens reais. Qualquer transicao para capital real e um projeto separado.
   perdeu para o baseline zero. Ela permanece somente como evidencia de
   pesquisa.
 
+Limitacoes adicionadas na revalidacao de 2026-09-17, sem alterar o veredito:
+
+- O custo configurado por lado (`PAPER_FEE_RATE=0.003` mais slippage minimo)
+  continua sendo premissa de configuracao, nao medicao da taxa real da conta.
+- Existem 3 achados abertos no Risk Manager reportados por auditoria e
+  reproduzidos em 2026-09-17: limite de confianca hibrida inclusivo em 0.50,
+  `technical_context` sem `rsi`/`macd` que nao bloqueia, e payload malformado
+  que levanta excecao em vez de retornar HOLD. Nenhum foi corrigido; a decisao
+  do operador foi nao alterar o Risk Manager. Detalhes, prova de reproducao e
+  alcance medido estao em `PROJECT_CLOSURE_2026-09-17.md`.
+- A particao `validation` **ja foi usada** pela campanha multiagente de
+  2026-08-10. Apenas o `holdout` permanece selado e nunca avaliado.
+
 ## Comandos De Verificacao
 
+O `python` global nao tem as dependencias do projeto. Use o venv.
+
 ```powershell
-python -m pytest -q
-python -m compileall -q backend
-python .\backend\tests\trading_readiness_report.py
-python .\backend\tests\dashboard_state.py
-python .\backend\tests\query_external_rag.py --health
-cd desktop
+& ".\.venv\Scripts\python.exe" -m pytest backend\tests -q
+& ".\.venv\Scripts\python.exe" -m compileall -q backend
+& ".\.venv\Scripts\python.exe" .\backend\tests\trading_readiness_report.py
+& ".\.venv\Scripts\python.exe" .\backend\tests\dashboard_state.py
+& ".\.venv\Scripts\python.exe" .\backend\tests\query_external_rag.py --health
+Set-Location .\desktop
+npm test
 npm run build
+$env:ELECTRON_DISABLE_SANDBOX="1"; npm run test:electron
 ```
 
 Um resultado `BLOCKED` no readiness por dados stale e um resultado seguro. O
 pipeline somente fica pronto quando dados, workers e clock estiverem dentro das
 tolerancias configuradas.
+
+O `npm run test:electron` executa o build antes do smoke; confira o exit code, e
+nao apenas a saida impressa.
