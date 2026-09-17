@@ -16,14 +16,27 @@ and the official docs before trusting a written command.
 
 ## Non-negotiable rules
 
-1. **Real trading stays off.** Never let an agent enable `REAL_TRADING_ENABLED`,
-   place an order, or touch the Risk Manager's authority.
-2. **Never paste secrets into a prompt.** No API keys, no OAuth tokens, no
-   `.env` contents. Use placeholders when structural context is enough. Agent
-   transcripts are persisted by third parties.
-3. **One writer per file.** Two agents must never hold the same working tree.
-4. **No direct merge to `main`.** The orchestrator integrates.
-5. **No force-push** on any branch.
+These mirror `AGENTS.md` in intent, plus a few additional delegation safeguards.
+`AGENTS.md` is the authority; this section is a checklist, not a replacement.
+
+1. **Real trading stays off.** `REAL_TRADING_ENABLED` must remain `false`. Never
+   **add** an order, cancel, transfer or withdrawal endpoint, and never place a
+   live order. Any authenticated trading call stays dry-run (`MB_DRY_RUN_*`);
+   read-only authenticated requests are unaffected.
+2. **The deterministic Risk Manager is the only component allowed to approve an
+   order.** Never weaken it, and never let an LLM, an agent or the RAG approve,
+   block or size an order. Do not change Risk Manager thresholds or the
+   conviction gate without explicit operator sign-off; fix calibration on the
+   prompt side.
+3. **Never commit `.env` files or credentials.** Never paste secrets, API keys,
+   OAuth tokens or `.env` contents into a prompt. Use placeholders when
+   structural context is enough; agent transcripts are persisted by third
+   parties.
+4. **Prefer failing closed.** A block or a HOLD is a valid, safe outcome.
+5. **One writer per file.** Two **write-capable** agents must never hold the same
+   working tree. Read-only agents may share one - see the isolation section.
+6. **No direct merge to `main`.** The orchestrator integrates.
+7. **No force-push** on any branch.
 
 ## Model policy (validated allowlist)
 
@@ -113,13 +126,25 @@ opencode session delete <sessionID>
 multi-line prompt passed as a command-line argument, `-m <provider>/<model>` can
 be **silently dropped** and OpenCode falls back to the default model. A short
 prompt honoured `-m`; a ~4 KB multi-line prompt did not, and produced a review
-from the wrong model. Two defenses:
+from the wrong model. Defenses:
 
 1. Put the long instructions in a file and pass it with `-f`, keeping the
    command-line message short.
-2. Read the banner in the output - it reads `> build` then the middle dot then the
-   model id - and abort if it is not the model you asked for. Never trust a
-   review whose model you did not confirm.
+2. **Verify the model from the session record, not from stdout.** `--format json`
+   emits `sessionID`, events, tokens and cost but **no** model or provider, and
+   the human-readable banner only appears in the default (non-JSON) format. So the
+   reliable check is to read the session back:
+
+   ```powershell
+   $sid = [regex]::Match(($out -join "`n"), 'ses_[A-Za-z0-9]+').Value
+   $exp = opencode export $sid 2>&1 | Out-String
+   [regex]::Matches($exp, '"modelID"\s*:\s*"([^"]*)"') | ForEach-Object { $_.Groups[1].Value }
+   [regex]::Matches($exp, '"providerID"\s*:\s*"([^"]*)"') | ForEach-Object { $_.Groups[1].Value }
+   ```
+
+   Confirm the pair is the model you asked for before trusting the review. In the
+   default format the banner line `> build` + middle dot + model id is also
+   visible, and that is the only place it appears.
 
 PowerShell 5.1 also writes a UTF-8 BOM with `Out-File`/`Set-Content -Encoding
 utf8`, and a BOM makes the attached file read as **binary** and fail the
@@ -146,7 +171,11 @@ claude --model glm-5.3-flash:cloud --resume $sid `
 Other flags that matter here: `-c/--continue`, `--fork-session`,
 `--effort <level>`, `--allowedTools "Read,Bash(git diff)"`, `--disallowedTools`,
 `--permission-mode`, `--add-dir <dir>`, `-w/--worktree [name]`, `--bg`.
-`ollama launch claude --model <model>` configures the connection for you.
+`ollama launch claude --model <model>` configures the connection for you. The
+Ollama CLI is installed in this environment at
+`C:\Users\danie\AppData\Local\Programs\Ollama\ollama.exe` (version 0.34.1) and is
+on `PATH`. If a sandbox cannot see it, that is a sandbox limitation - verify with
+`ollama --version` before assuming it is missing.
 
 Two caveats, both verified:
 
