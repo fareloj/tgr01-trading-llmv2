@@ -60,7 +60,10 @@ const smokeState = {
     final_confidence: 0.6,
     execution_price: 400000,
     reasoning: "Smoke HOLD",
-    snapshot: { technical: {}, data_health: {}, news_risk: { risk_level: "NORMAL" }, recent_news: [{ headline: "smoke" }] }
+    // Real payloads carry volatility_atr as an object (see
+    // backend/features/indicators.py). Rendering it as a React child blanked the
+    // whole console, so the smoke fixture must use the live shape, not a scalar.
+    snapshot: { technical: { volatility_atr: { value: 1043.93, status: "NORMAL" }, rsi_value: 13.81, macd_status: "BEARISH_EXPANDING" }, data_health: {}, news_risk: { risk_level: "NORMAL" }, recent_news: [{ headline: "smoke" }] }
   }, {
     id: 2,
     timestamp: 1779999970,
@@ -73,8 +76,8 @@ const smokeState = {
   }],
   entry_evaluation: {
     entries: [
-      { id: 1, kind: "approved", action: "BUY", timestamp: 1780000000, execution_price: 399000, technical: {}, horizons: { "5": { status: "data_gap" } } },
-      { id: 2, kind: "blocked", action: "HOLD", timestamp: 1780000030, execution_price: 400000, technical: {}, horizons: {} }
+      { id: 1, kind: "approved", action: "BUY", timestamp: 1780000000, execution_price: 399000, technical: { volatility_atr: { value: 1043.93, status: "NORMAL" }, rsi_value: 13.81, macd_status: "BEARISH_EXPANDING" }, horizons: { "5": { status: "data_gap" } } },
+      { id: 2, kind: "blocked", action: "HOLD", timestamp: 1780000030, execution_price: 400000, technical: { volatility_atr: { value: 900.5, status: "NORMAL" } }, horizons: {} }
     ]
   }
 };
@@ -189,6 +192,10 @@ async function runSmokeTest() {
       hasDecisionModel,
       hasConfigErrorBanner,
       showsFabricatedZeroCost,
+      // The whole console blanks when volatility_atr (an object in live payloads)
+      // is rendered as a React child. Assert the real value reached the DOM.
+      auditGridText: document.querySelector('.audit-grid')?.textContent || '',
+      rootChildCount: document.getElementById('root')?.children.length ?? -1,
       previewBannerVisible: Boolean(document.querySelector('.preview-banner')),
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: document.documentElement.clientWidth
@@ -234,6 +241,9 @@ async function runSmokeTest() {
   if (!result.hasDecisionModel) failures.push("cost panel did not show the decision model");
   if (result.hasConfigErrorBanner) failures.push("cost panel showed a config error banner with a valid config");
   if (result.showsFabricatedZeroCost) failures.push("cost panel fabricated a 0.00% cost");
+  if (result.rootChildCount < 1) failures.push("console rendered an empty root with the live ATR shape");
+  if (!result.auditGridText.includes("1043.93")) failures.push("live ATR object value missing from the audit grid");
+  if (result.auditGridText.includes("[object Object]")) failures.push("audit grid stringified an object");
   if (result.documentWidth > result.viewportWidth + 2) failures.push(`horizontal overflow ${result.documentWidth}/${result.viewportWidth}`);
   if (!invokedActions.includes("diagnostics")) failures.push("diagnostics IPC was not invoked");
   if (rendererErrors.length) failures.push(`renderer errors: ${rendererErrors.join(" | ")}`);
@@ -261,7 +271,29 @@ async function runSmokeTest() {
   if (malformed.fabricatedZero) failures.push("malformed cost config fabricated a 0.00% cost");
   if (!malformed.costShowsUnknown) failures.push("malformed cost config did not render unknown cost");
 
-  console.log(JSON.stringify({ ...result, malformedConfig: malformed, invokedActions, rendererErrors, screenshot: SCREENSHOT_PATH, costScreenshot: COST_SCREENSHOT_PATH }, null, 2));
+  // Third scenario: an unusable ATR must render "--" in BOTH the value and the
+  // status cell. A healthy-looking "NORMAL" beside an unknown value would paint
+  // absent safety data as benign.
+  stateOverride = {
+    ...smokeState,
+    logs: [{ ...smokeState.logs[0], snapshot: { ...smokeState.logs[0].snapshot, technical: { volatility_atr: { value: null, status: "NORMAL" }, rsi_value: null, macd_status: "NEUTRAL" } } }]
+  };
+  await window.webContents.reload();
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const unknownAtr = await window.webContents.executeJavaScript(`(() => {
+    const cells = [...document.querySelectorAll('.audit-grid > div')];
+    const atr = cells.find(cell => cell.querySelector('small')?.textContent.trim() === 'ATR (14)');
+    if (!atr) return { error: 'missing ATR cell' };
+    return {
+      value: atr.querySelector('strong')?.textContent.trim(),
+      status: atr.querySelector('em')?.textContent.trim()
+    };
+  })()`);
+  if (unknownAtr.error) failures.push(`unknown ATR: ${unknownAtr.error}`);
+  if (unknownAtr.value !== "--") failures.push(`unknown ATR rendered value=${unknownAtr.value} instead of --`);
+  if (unknownAtr.status !== "--") failures.push(`unknown ATR rendered status=${unknownAtr.status} instead of --`);
+
+  console.log(JSON.stringify({ ...result, malformedConfig: malformed, unknownAtr, invokedActions, rendererErrors, screenshot: SCREENSHOT_PATH, costScreenshot: COST_SCREENSHOT_PATH }, null, 2));
   window.destroy();
   if (failures.length) throw new Error(failures.join("; "));
 }

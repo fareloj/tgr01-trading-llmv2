@@ -6,6 +6,7 @@ import {
   ShieldCheck, SlidersHorizontal, TerminalSquare, UsersRound
 } from "lucide-react";
 import { evaluationsToCsv } from "./csv.mjs";
+import { atrStatus, atrValue } from "./indicators.mjs";
 import {
   convictionOutlook,
   costHurdles,
@@ -367,7 +368,7 @@ function App() {
           <div className="audit-grid">
             <div><small>RSI (14)</small><strong>{technical.rsi_value ?? "--"}</strong><em>{technical.rsi_status || "--"}</em></div>
             <div><small>MACD</small><strong>{technical.macd_histogram ?? "--"}</strong><em>{technical.macd_status || "--"}</em></div>
-            <div><small>ATR (14)</small><strong>{technical.volatility_atr ?? "--"}</strong></div>
+            <div><small>ATR (14)</small><strong>{atrValue(technical) ?? "--"}</strong><em>{atrStatus(technical) || "--"}</em></div>
             <div><small>Price</small><strong>{latest.execution_price == null ? "--" : money(latest.execution_price)}</strong><em>BRL</em></div>
             <div><small>System Reliability</small><strong className={latest.system_reliability == null ? "" : "good"}>{latest.system_reliability == null ? "--" : `${Math.round(latest.system_reliability * 100)}%`}</strong></div>
             <div><small>Final Confidence</small><strong className={latest.final_confidence == null ? "" : "warn"}>{latest.final_confidence == null ? "--" : `${Math.round(latest.final_confidence * 100)}%`}</strong></div>
@@ -408,7 +409,7 @@ function App() {
             return <tr key={entry.id}>
               <td>{entry.id}</td><td>{localTime(entry.timestamp)}</td><td><b className={entry.action?.toLowerCase()}>{entry.action || entry.llm_action}</b></td>
               <td>{entry.execution_price ? money(entry.execution_price) : "--"}</td>
-              <td>RSI {tech.rsi_value ?? "--"} | MACD {tech.macd_status || "--"} | ATR {tech.volatility_atr ?? "--"}</td>
+              <td>RSI {tech.rsi_value ?? "--"} | MACD {tech.macd_status || "--"} | ATR {atrValue(tech) ?? "--"}</td>
               {visibleHorizons.map(horizon => <td key={horizon}><HorizonCell result={entry.horizons?.[horizon]} blocked={blocked} /></td>)}
             </tr>;
           })}</tbody>

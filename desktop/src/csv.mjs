@@ -1,3 +1,5 @@
+import { atrValue } from "./indicators.mjs";
+
 export function escapeCsvCell(value) {
   if (value == null) return "";
   const text = String(value);
@@ -16,7 +18,7 @@ export function evaluationsToCsv(entries, horizons = ["5", "15", "30", "60"], ti
       entry.execution_price ?? "",
       tech.rsi_value ?? "",
       tech.macd_status || "",
-      tech.volatility_atr ?? "",
+      atrValue(tech) ?? "",
       entry.reasoning || entry.reason || ""
     ];
     const future = horizons.flatMap(horizon => {
