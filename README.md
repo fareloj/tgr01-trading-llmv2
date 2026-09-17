@@ -24,31 +24,46 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Execution | Paper trading only |
 | Real exchange orders | Not implemented; authenticated BUY/SELL validation is dry-run only |
 | Active database | PostgreSQL 16 |
-| Experimental agent models | CIO: `glm-5.2:cloud`; News/Technical: `deepseek-v4-flash:cloud` through Ollama |
+| Experimental agent models | Decision `kimi-k2.7-code:cloud`; News/Technical `glm-5.3:cloud`, through the local Ollama daemon |
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
 | RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
-| Latest backend validation | 340 Python tests passing |
-| Latest desktop validation | 6 Node tests, Vite build, and Electron smoke passing |
+| Latest backend validation | 438 Python tests passing |
+| Latest desktop validation | 35 Node tests, Vite build, and Electron smoke passing |
 
-These test counts describe the state recorded on 2026-08-14. They validate
+These test counts describe the state recorded on 2026-09-16. They validate
 contracts, failure behavior, accounting, and interfaces. They do not measure
 future returns.
 
-The current Ollama Cloud configuration is a **paper-only experiment**. GLM 5.2
-acts as the CIO/Decision Agent, while DeepSeek V4 Flash handles the News and
-Technical roles when the multi-agent pipeline is enabled. This assignment is
+The current configuration is a **paper-only experiment**. The Decision Agent
+uses Kimi K2.7 Code as the final proposal, while GLM 5.3 handles the News and
+Technical roles in the multi-agent pipeline. Each role resolves its own provider,
+model, temperature, token budget and reasoning effort through
+`backend/agents/model_config.py`; the sanctioned providers are the local Ollama
+daemon, the direct Ollama Cloud API and OpenCode Go. This assignment is
 engineering configuration, not model-selection or profitability evidence.
 
 The accepted paper-only boundary and known limitations are documented in
-[Final Acceptance](docs/reports/FINAL_ACCEPTANCE.md). The latest adversarial
-review is in [Operational Red Team](docs/reports/RED_TEAM_REPORT_2026-08-01.md).
+[Final Acceptance](docs/reports/FINAL_ACCEPTANCE.md). The August operational adversarial review is in
+[Operational Red Team](docs/reports/RED_TEAM_REPORT_2026-08-01.md); subsequent
+review passes and corrections are recorded in the
+[September handoff](docs/reports/SESSION_HANDOFF_2026-09-16.md).
 
 ## Interfaces
 
 ### Electron operations console
 
 ![Electron operations console](docs/assets/electron-ops-console.png)
+
+### Cost Reality panel
+
+The console shows the cost that dominates the decision, not only the decision
+itself: the per-side cost, both round-trip hurdles, the ratio between the typical
+60-minute move and the BUY cost, the conviction gate, the blocking reasons and
+the model assigned to each role. An unknown value renders as `--`, never as a
+benign `0` or `NORMAL`.
+
+![Cost Reality panel](docs/assets/electron-cost-reality.png)
 
 ### Textual terminal interface
 
@@ -136,7 +151,7 @@ Consecutive identical episodes are compacted with a bounded `repeat_count` so
 rapid cycles cannot fill the prompt with duplicate context.
 
 ```powershell
-py -3.11 .\backend\tests\analyze_trading_runs.py --limit 30
+& ".\.venv\Scripts\python.exe" .\backend\tests\analyze_trading_runs.py --limit 30
 ```
 
 ### Authenticated exchange dry-run
@@ -151,7 +166,7 @@ withdrawal method. Its only POST is the OAuth token exchange; all exchange data
 operations are GET requests. `REAL_TRADING_ENABLED` must remain `false`.
 
 ```powershell
-py -3.11 .\backend\tests\validate_mb_order_dry_run.py `
+& ".\.venv\Scripts\python.exe" .\backend\tests\validate_mb_order_dry_run.py `
   --buy-brl 1.00 --sell-btc 0.00000150
 ```
 
@@ -176,10 +191,10 @@ aids, not ground truth about what a human trader should have done.
 Useful commands:
 
 ```powershell
-py -3.11 .\backend\tests\analyze_trade_logs.py --since-id 1 --limit 50
-py -3.11 .\backend\tests\analyze_entry_decisions.py --since-id 1
-py -3.11 .\backend\tests\evaluate_decisions.py --since-id 1 --horizons 5,15,30,60
-py -3.11 .\backend\tests\trading_readiness_report.py
+& ".\.venv\Scripts\python.exe" .\backend\tests\analyze_trade_logs.py --since-id 1 --limit 50
+& ".\.venv\Scripts\python.exe" .\backend\tests\analyze_entry_decisions.py --since-id 1
+& ".\.venv\Scripts\python.exe" .\backend\tests\evaluate_decisions.py --since-id 1 --horizons 5,15,30,60
+& ".\.venv\Scripts\python.exe" .\backend\tests\trading_readiness_report.py
 ```
 
 ### Reproducible historical campaign
@@ -194,7 +209,7 @@ assumptions. It never writes an order, trade log, or portfolio balance.
 Inspect the frozen sample without consuming provider quota:
 
 ```powershell
-py -3.11 .\backend\tests\run_historical_campaign.py `
+& ".\.venv\Scripts\python.exe" .\backend\tests\run_historical_campaign.py `
   --from-local "2026-06-06 00:00" --to-local "2026-06-07 23:59" `
   --variants current balanced --plan-only
 ```
@@ -202,7 +217,7 @@ py -3.11 .\backend\tests\run_historical_campaign.py `
 Run the same stratified comparison after reviewing the call count:
 
 ```powershell
-py -3.11 .\backend\tests\run_historical_campaign.py `
+& ".\.venv\Scripts\python.exe" .\backend\tests\run_historical_campaign.py `
   --from-local "2026-06-06 00:00" --to-local "2026-06-07 23:59" `
   --variants current balanced --news-mode historical
 ```
@@ -218,11 +233,11 @@ purged boundaries. This prevents future labels near a split from leaking into
 prompt or rule selection.
 
 ```powershell
-py -3.11 .\backend\tests\download_mb_history.py
-py -3.11 .\backend\tests\prepare_historical_evaluation_dataset.py
-py -3.11 .\backend\tests\import_historical_partition.py `
+& ".\.venv\Scripts\python.exe" .\backend\tests\download_mb_history.py
+& ".\.venv\Scripts\python.exe" .\backend\tests\prepare_historical_evaluation_dataset.py
+& ".\.venv\Scripts\python.exe" .\backend\tests\import_historical_partition.py `
   --partition development
-py -3.11 .\backend\tests\run_historical_campaign.py `
+& ".\.venv\Scripts\python.exe" .\backend\tests\run_historical_campaign.py `
   --dataset-manifest .\backend\data_exports\historical_evaluation\manifest.json `
   --partition development --variants balanced --news-mode technical-only `
   --selection-strategy stratified
@@ -242,15 +257,18 @@ A 27-call technical-only development smoke test completed without provider
 errors, but exposed a fixture contradiction: news had been removed while its
 health fields still described it as fresh. The report is retained as an
 invalidated development incident, not trading evidence. The fixture and
-auditable decision context are now deterministic; the frozen 300-call campaign
-is the next candidate evaluation. See
-[Historical Development Campaign](docs/reports/HISTORICAL_DEVELOPMENT_CAMPAIGN_2026-08-04.md).
+auditable decision context are now deterministic, and the frozen 300-call
+corrected campaign has since completed without technical errors; see
+[Historical Development Campaign](docs/reports/HISTORICAL_DEVELOPMENT_CAMPAIGN_2026-08-04.md)
+and [Corrected Campaign](docs/reports/HISTORICAL_DEVELOPMENT_BALANCED_CORRECTED.md).
+Current next-experiment guidance is in the
+[Edge and Cost Diagnostic](docs/reports/EDGE_AND_COST_DIAGNOSTIC_2026-09-16.md).
 
 Paired campaign reports can be consolidated while verifying that price, RSI,
 MACD, and ATR stayed identical across each news intervention:
 
 ```powershell
-py -3.11 .\backend\tests\compare_historical_campaigns.py `
+& ".\.venv\Scripts\python.exe" .\backend\tests\compare_historical_campaigns.py `
   "backend/reports/matrix_*.json"
 ```
 
@@ -274,6 +292,26 @@ outputs violated the stricter stale-news/evidence contract and failed closed or
 were already HOLD. This is useful safety evidence, not evidence of a profitable
 strategy. See the complete
 [multi-agent historical validation](docs/reports/MULTI_AGENT_HISTORICAL_VALIDATION_2026-08-10.md).
+
+That report predates the current role-based provider configuration; the model
+names above describe the run that was recorded, not today's defaults.
+
+### Edge versus cost diagnostic
+
+A later 120-sample campaign on the `development` partition measured net margin
+after configured costs. After a prompt-side calibration fix, the Risk Manager
+approved directional actions again, but **the mean net margin was negative at
+every tested horizon** (`-0.48%` to `-0.57%`). The observed cause is cost versus
+horizon: the configured cost is `0.35%` per side, so a BUY must clear a `0.70%`
+round-trip, while the median absolute 60-minute move in that sample was `0.470%`.
+The MACD the model received predicted the 60-minute direction at chance.
+
+Read the scope before generalizing: 120 rows over 24 overlapping windows in a
+single partition with synthetic news is **not** a walk-forward result. The
+`validation` partition and the sealed `holdout` were never touched. The finding
+supports "at this horizon and these costs the gross edge did not cover the cost",
+not a universal claim. See [Edge and Cost Diagnostic](docs/reports/EDGE_AND_COST_DIAGNOSTIC_2026-09-16.md)
+and the [session handoff](docs/reports/SESSION_HANDOFF_2026-09-16.md).
 
 ## LLM Analysis Tools
 
@@ -316,10 +354,10 @@ decision-case inspection. It is not the primary RAG backend and is not in the
 deterministic order-approval path.
 
 ```powershell
-py -3.11 .\backend\tests\ingest_rag_sources.py --project-docs
-py -3.11 .\backend\tests\ingest_rag_sources.py --news-hours 24 --news-limit 20
-py -3.11 .\backend\tests\ingest_decision_cases.py --since-id 1 --limit 100
-py -3.11 .\backend\tests\query_decision_memory.py --current-payload --limit 5
+& ".\.venv\Scripts\python.exe" .\backend\tests\ingest_rag_sources.py --project-docs
+& ".\.venv\Scripts\python.exe" .\backend\tests\ingest_rag_sources.py --news-hours 24 --news-limit 20
+& ".\.venv\Scripts\python.exe" .\backend\tests\ingest_decision_cases.py --since-id 1 --limit 100
+& ".\.venv\Scripts\python.exe" .\backend\tests\query_decision_memory.py --current-payload --limit 5
 ```
 
 ### Hybrid RAG service
@@ -344,8 +382,8 @@ unavailable, trading analysis continues without RAG evidence. RAG content
 cannot approve, block, or size an order.
 
 ```powershell
-py -3.11 .\backend\tests\query_external_rag.py --health
-py -3.11 .\backend\tests\query_external_rag.py "where is stale market data rejected"
+& ".\.venv\Scripts\python.exe" .\backend\tests\query_external_rag.py --health
+& ".\.venv\Scripts\python.exe" .\backend\tests\query_external_rag.py "where is stale market data rejected"
 ```
 
 ## TCN Research: Archived
@@ -375,11 +413,18 @@ See [TCN archive boundary](backend/ml/ARCHIVED.md) and
 
 Requirements:
 
-- Python 3.11;
+- Python 3.11, with the project virtual environment created at `.venv`;
 - Docker Desktop or another Docker Compose runtime;
 - Node.js for the Electron interface;
 - one compatible LLM API key for decision experiments.
 - Ollama signed in locally when using the experimental cloud-model default.
+
+The commands below run the project interpreter explicitly. The global `py -3.11`
+launcher does not have this project's dependencies installed:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m pip install -r backend\requirements.txt
+```
 
 Create local configuration files:
 
@@ -392,36 +437,38 @@ Set a strong local PostgreSQL password and keep `DATABASE_URL` consistent.
 Never commit either `.env` file.
 
 The example `backend/.env.example` selects Ollama's local OpenAI-compatible
-endpoint and `glm-5.2:cloud`. `LLM_*` variables are canonical. Existing
+endpoint and `kimi-k2.7-code:cloud`. `LLM_*` variables are canonical. Existing
 `GROQ_*` variables remain supported as a legacy fallback for comparisons.
 
 An experimental multi-agent configuration is also documented, but remains
-disabled and shadow-only by default. It assigns `deepseek-v4-flash:cloud` to news
-analysis and interpretation of the deterministic eight-hour technical context,
-and the configured Decision model to the final proposal. Both configured tags
-passed a live structured-contract smoke test on 2026-08-14. This is an
-evaluation configuration, not evidence that multiple agents improve trading
-results. Outputs retain source IDs and the final model also receives the
-original snapshot to reduce correlated summary risk.
+disabled and shadow-only by default. It assigns `glm-5.3:cloud` to news
+analysis and interpretation of the deterministic technical context, and
+`kimi-k2.7-code:cloud` to the final proposal, each with its own provider, token
+budget and reasoning effort (`glm-5.3` measured better and roughly 7x faster at
+`reasoning_effort=low`, so the news and technical roles set it and the decision
+role leaves it unset). Both tags passed a live structured-contract smoke test on
+2026-09-16. This is an evaluation configuration, not evidence that multiple
+agents improve trading results. Outputs retain source IDs and the final model
+also receives the original snapshot to reduce correlated summary risk.
 
 Start PostgreSQL and initialize the schema:
 
 ```powershell
 docker compose up -d db
-py -3.11 .\backend\core\database.py
+& ".\.venv\Scripts\python.exe" .\backend\core\database.py
 ```
 
 Start workers and run strict preflight:
 
 ```powershell
-py -3.11 .\backend\tests\start_workers.py
-py -3.11 .\backend\tests\preflight_data_date.py --require-news-today --require-workers --require-clock-sync
+& ".\.venv\Scripts\python.exe" .\backend\tests\start_workers.py
+& ".\.venv\Scripts\python.exe" .\backend\tests\preflight_data_date.py --require-news-today --require-workers --require-clock-sync
 ```
 
 Run paper trading only after preflight passes:
 
 ```powershell
-py -3.11 .\backend\tests\run_paper_trading.py --cycles 10 --sleep 900
+& ".\.venv\Scripts\python.exe" .\backend\tests\run_paper_trading.py --cycles 10 --sleep 900
 ```
 
 The worker keeps one-minute candles for indicator continuity. The Decision
@@ -434,8 +481,8 @@ For auditable forward testing, collection and future evaluation are separate
 phases. The finalizer refuses to score horizons that have not matured:
 
 ```powershell
-py -3.11 .\backend\ops\run_forward_session.py collect --cycles 96 --sleep 900 --horizons 15,60,240,480
-py -3.11 .\backend\ops\run_forward_session.py finalize --session forward_YYYYMMDD_HHMMSS_utc
+& ".\.venv\Scripts\python.exe" .\backend\ops\run_forward_session.py collect --cycles 96 --sleep 900 --horizons 15,60,240,480
+& ".\.venv\Scripts\python.exe" .\backend\ops\run_forward_session.py finalize --session forward_YYYYMMDD_HHMMSS_utc
 ```
 
 Each session records its starting trade-log ID, model configuration, command
@@ -481,10 +528,10 @@ caches.
 Backend:
 
 ```powershell
-py -3.11 -m pytest backend\tests -q
-py -3.11 .\backend\tests\chaos_monkey.py
-py -3.11 .\backend\tests\redteam_llm_matrix.py
-py -3.11 .\backend\tests\trading_readiness_report.py
+& ".\.venv\Scripts\python.exe" -m pytest backend\tests -q
+& ".\.venv\Scripts\python.exe" .\backend\tests\chaos_monkey.py
+& ".\.venv\Scripts\python.exe" .\backend\tests\redteam_llm_matrix.py
+& ".\.venv\Scripts\python.exe" .\backend\tests\trading_readiness_report.py
 ```
 
 Desktop:
@@ -526,6 +573,13 @@ dependencies are ignored by Git.
 ## Known Limitations
 
 - No claim of profitability or predictive edge is supported by current data.
+- The measured net margin after configured costs was negative at every tested
+  horizon on the `development` partition, and the configured round-trip cost
+  exceeded the median absolute 60-minute move. That result is one partition with
+  overlapping windows and synthetic news, not a walk-forward proof.
+- The configured fee (`PAPER_FEE_RATE=0.003`) is a configuration premise, not a
+  measurement of the real account fee. It has not been confirmed against the
+  exchange fee table.
 - The live Decision Agent has been checked on a small adversarial matrix, not a
   statistically representative market sample.
 - The historical campaign runner exists, but a statistically useful conclusion
