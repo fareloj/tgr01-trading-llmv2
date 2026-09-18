@@ -2,8 +2,9 @@
 
 Operational handoff for the next agent working on the archived TCN. Read
 `AGENTS.md` first: the commit protocol there is mandatory. Read this whole
-document before running anything, because two of the prerequisites no longer
-exist on disk and one of them is not obvious.
+document before running anything, because five of the artifacts it references no
+longer exist on disk, only two of them are reproducible, and neither training
+line can start without a file that no script in this repository produces.
 
 Encoding: write files as plain ASCII. PowerShell 5.1 `Out-File` and
 `Set-Content -Encoding utf8` write a UTF-8 BOM and corrupt accents and the
@@ -37,8 +38,10 @@ git log --oneline -5
 git log --oneline origin/main..HEAD
 ```
 
-At the moment of writing: branch `main`, HEAD `db492f9`, working tree clean,
-`origin/main` identical to HEAD, no worktrees, no stashes.
+At the moment this handoff was written: branch `main`, HEAD `db492f9`, working
+tree clean, `origin/main` identical to HEAD, no worktrees, no stashes. This
+document itself was committed on top of that, so expect HEAD to be later. Run
+the commands; do not copy the hash.
 
 Two branches exist: `main` and `fix/wilder-rsi-atr-nan` (pre-existing).
 
@@ -123,10 +126,11 @@ What still works unchanged:
   --horizons 15 60 --barrier-pct 0.20 0.40
 ```
 
-**The global dataset cannot be produced by any script in this repository.**
-Verified: `binance_full_dataset.csv` is referenced only as a *default input* by
-`build_slow_tcn_dataset.py:24` and `train_tcn.py:55`. Nothing writes it. The
-closest producer, `download_binance_history.py`, writes a merged
+**The global dataset cannot be produced by any script in this repository, and
+BOTH lines require it.** Verified: `binance_full_dataset.csv` is referenced only
+as a *default input* by `build_slow_tcn_dataset.py:24` and `train_tcn.py:55`,
+plus one mention in the reproduction block of the research report. Nothing
+writes it. The closest producer, `download_binance_history.py`, writes a merged
 `btc_usdt_1m.csv` under `backend/data_exports/binance_btcusdt_1m/` using
 `market_history.CSV_FIELDS`, which has **no `is_observed` column** -- and
 `build_slow_tcn_dataset.py:49` requires exactly
@@ -137,38 +141,52 @@ builder with the documented flags and no `--global-dataset` fails with
 FileNotFoundError: 'D:\tgr01-trading-llmv2\backend\reports\binance_full_dataset.csv'
 ```
 
+**The archived line is blocked by the same file, whatever the device.**
+`train_tcn.py:334-343` calls `_fingerprint_dataset(global_path)` and
+`_prepare_domain(global_path, ...)` unconditionally, before any epoch runs, so
+`--global-epochs 0` does not avoid the load. Reproduced: the archive's own
+random-init ablation (`--global-epochs 0 --local-epochs 1 --maximum-sequences 16`)
+fails with the same `FileNotFoundError`. There is no "local-only" path.
+
 So step 4 of the old ordered list could never run. The consequences for the
 five missing artifacts:
 
 | Missing artifact | Has a producing command? |
 | --- | --- |
-| `mb_tcn_dataset.csv` | **yes**, `build_tcn_sequence_dataset.py` |
-| `mb_barrier_targets.npz` | **yes**, `build_barrier_targets.py` |
+| `mb_tcn_dataset.csv` | **yes**, `build_tcn_sequence_dataset.py` -- verified 129,531 rows |
+| `mb_barrier_targets.npz` | **yes**, `build_barrier_targets.py` -- verified 129,531 rows of labels, of which 37,151 are valid at the 15m horizon and 9,820 at 60m (46,971 valid cells total across both) |
 | `binance_full_dataset.csv` | **no** |
 | `binance_barrier_targets.npz` | **no** (needs the file above) |
-| `tcn_barrier_final/local_best.pt` | **no** (needs a full CUDA train) |
+| `tcn_barrier_final/local_best.pt` | **no** (needs the global file above, plus a train) |
+
+The validity numbers matter: at the 60-minute horizon only **7.6%** of candidate
+rows have a usable first-touch label. Any direction training on this local data
+is therefore training on an eighth of the rows you might expect from the file
+size. Do not read `129,531` as the effective sample count.
+
+The two reproducible artifacts are enough to exercise the dataset builders and
+the barrier-target code. They are **not** enough to train either model.
 
 Your options, in order of preference:
 
-1. **Skip the global domain for the slow line and document it.** The reopening
-   protocol says global pretraining is "an ablation, not an assumption", so
-   omitting it is permitted *if stated*. But note the builder currently
-   **hard-requires** a global file, so skipping means either passing a
-   synthetic global frame (constant close, `is_observed` true) or making the
-   global argument optional in the builder. The second is a code change and
-   therefore a reviewed commit, not a throwaway edit. Decide deliberately and
-   record which you chose.
-2. **Build the missing global file yourself** from the Binance download by
-   adding `is_observed` and writing it to `backend/reports/binance_full_dataset.csv`.
-   That is also a code change, and it must preserve the causal semantics: an
-   `is_observed` flag must reflect whether the source actually had that minute.
-3. **Do not use the slow line at all** and stay on the archived 1-minute line,
-   which needs only the local dataset. This is the lowest-risk path if the goal
-   is to reproduce the baseline.
+1. **Build the missing global file.** This is the only option that unblocks
+   either training line. Take the Binance download and add `is_observed`,
+   writing it to `backend/reports/binance_full_dataset.csv`. The `is_observed`
+   flag must reflect whether the source actually had that minute, or the causal
+   contract is broken. This is a code change and therefore a reviewed commit.
+2. **Make the global domain genuinely optional** in both trainers and the slow
+   builder, and document the decision. The reopening protocol already says
+   global pretraining is "an ablation, not an assumption", so omitting it is
+   permitted *if stated*. Also a code change, and larger than option 1 because
+   it touches `train_tcn.py`'s scaler fitting, which currently fits on global
+   training targets.
+3. **Do neither and stop.** Running the dataset builders and the barrier code is
+   still useful validation work, but no model will train. Say so plainly in the
+   report rather than producing a smoke number from a synthetic global series.
 
-There is a fourth, worse option: silently substituting another exchange or a
-synthetic global series without saying so. Mixing providers changes the
-experiment's semantics, which `docs/reports/FINAL_ACCEPTANCE.md` already lists as a
+A fourth, worse option: silently substituting another exchange or a synthetic
+global series without saying so. Mixing providers changes the experiment's
+semantics, which `docs/reports/FINAL_ACCEPTANCE.md` already lists as a
 limitation. Do not do that.
 
 If the Binance download itself fails (no network, or the archive layout
@@ -340,11 +358,50 @@ lacks a reserved temporal test, lacks calibrated temperatures, or falls below
 the balanced-accuracy floor. A refusal is correct behaviour, not a bug to work
 around.
 
-Checked by reading the payload: `train_slow_tcn_v2.py` does write
-`direction_target_mode`, `direction_temperatures` and `test_evaluated`, which is
-what the advisor reads. So the schema is nominally compatible. Whether the
-numbers clear the 0.50 balanced-accuracy floor is the experiment's question, and
-the test window is only evaluated with `--evaluate-test`.
+**The advisor is structurally incompatible with the slow trainer, on three
+independent axes. A slow-line checkpoint can never qualify as written.** Verified
+in `backend/ml/inference.py:23-58` and reproduced by calling
+`qualify_advisory_checkpoint` with the exact payload shape the trainer writes:
+
+1. `inference.py:25` requires `direction_target_mode == "barrier"`.
+   `train_slow_tcn_v2.py:298` hardcodes `"endpoint"`. Instant refusal, always.
+2. `inference.py:43` reads `metadata["test_direction_metrics"]`.
+   `train_slow_tcn_v2.py:337` writes `test_metrics`. The key is never present.
+3. `inference.py:47` iterates the hardcoded tuple `("15m", "60m")`. The slow
+   line's horizons are 240 and 1440 minutes (`train_slow_tcn_v2.py:53`), so even
+   a present metric would never be read, and the balanced accuracy would default
+   to 0.0, below the floor.
+
+Reproduced output:
+
+```
+qualified: False
+failures: ('checkpoint was not trained on first-touch barriers',
+           'test direction metrics are missing')
+```
+
+That output is for the `--evaluate-test` shape (`test_evaluated=True`). Without
+that flag the refusal is even earlier, because
+`train_slow_tcn_v2.py:130` defaults it off and `inference.py:27` then also adds
+"reserved temporal test was not evaluated".
+
+So the documented `inspect_tcn_advisory.py --checkpoint .../model.pt` command
+will always return `UNAVAILABLE` for the slow line. That is the advisor failing
+closed on a schema mismatch, not the model failing an accuracy test.
+
+Decide explicitly which of these this is:
+
+- **A real incompatibility to fix.** The slow line is the protocol's preferred
+  design, so making the advisor understand `endpoint` mode and arbitrary
+  horizons is the coherent goal. It is a code change to `inference.py` and
+  therefore a reviewed commit, and it must not loosen the fail-closed default:
+  an unknown mode or missing metric must still refuse.
+- **Two separate designs that should not share an advisor.** Then say so, and
+  do not claim in the report that a slow-line checkpoint is "qualified for
+  research".
+
+Do not edit the advisor just to make one checkpoint pass. The refusal above is
+correct behaviour for the payload as it exists.
 
 ## 10. Non-negotiables
 
