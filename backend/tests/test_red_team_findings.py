@@ -184,7 +184,7 @@ def test_rt_cooldown_gate_uses_canonical_repository():
         },
         "news_context": [{"headline": "Mercado normal", "source": "pytest"}],
         "data_health": {"is_market_data_stale": False, "is_news_stale": False},
-        "news_risk": {"has_negative_red_flag": False},
+        "news_risk": {"has_negative_red_flag": False, "has_untrusted_instruction": False},
         "portfolio_context": {"max_allowed_risk_per_trade": 5.0},
     }
 
@@ -220,7 +220,7 @@ def test_rt_directional_gate_requires_bullish_confirmation_for_oversold_buy():
         },
         "news_context": [{"headline": "Mercado em queda", "source": "pytest"}],
         "data_health": {"is_market_data_stale": False, "is_news_stale": False},
-        "news_risk": {"has_negative_red_flag": False},
+        "news_risk": {"has_negative_red_flag": False, "has_untrusted_instruction": False},
         "portfolio_context": {"max_allowed_risk_per_trade": 5.0},
     }
 
@@ -244,7 +244,7 @@ def test_rt_directional_gate_requires_bullish_confirmation_for_oversold_buy():
         },
         "news_context": [{"headline": "Mercado caindo", "source": "pytest"}],
         "data_health": {"is_market_data_stale": False, "is_news_stale": False},
-        "news_risk": {"has_negative_red_flag": False},
+        "news_risk": {"has_negative_red_flag": False, "has_untrusted_instruction": False},
         "portfolio_context": {"max_allowed_risk_per_trade": 5.0},
     }
 

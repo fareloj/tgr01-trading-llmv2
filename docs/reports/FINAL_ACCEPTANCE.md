@@ -19,9 +19,10 @@ escopo acima permanece o mesmo; o que mudou foi o estado numerico do projeto.
 - PostgreSQL 16 e o unico banco do caminho ativo.
 - Banco pytest isolado do banco da aplicacao e protegido contra duas suites
   simultaneas por advisory lock.
-- Suite Python: 209 testes aprovados na aceitacao original; **438 aprovados na
-  revalidacao de 2026-09-17**, incluindo fronteira neural fail-closed e smoke
-  test real da TUI.
+- Suite Python: 209 testes aprovados na aceitacao original; **453 aprovados na
+  revalidacao de 2026-09-17** (438 antes de fechar os 3 achados do Risk Manager,
+  +15 testes de regressao), incluindo fronteira neural fail-closed e smoke test
+  real da TUI.
 - Desktop: 6 testes Node na aceitacao original; **35 na revalidacao de
   2026-09-17**, com build Vite e smoke Electron aprovados, exit code 0; 17 acoes
   operacionais cobertas e nenhum erro de renderer ou overflow horizontal.
@@ -94,12 +95,14 @@ Limitacoes adicionadas na revalidacao de 2026-09-17, sem alterar o veredito:
 
 - O custo configurado por lado (`PAPER_FEE_RATE=0.003` mais slippage minimo)
   continua sendo premissa de configuracao, nao medicao da taxa real da conta.
-- Existem 3 achados abertos no Risk Manager reportados por auditoria e
-  reproduzidos em 2026-09-17: limite de confianca hibrida inclusivo em 0.50,
-  `technical_context` sem `rsi`/`macd` que nao bloqueia, e payload malformado
-  que levanta excecao em vez de retornar HOLD. Nenhum foi corrigido; a decisao
-  do operador foi nao alterar o Risk Manager. Detalhes, prova de reproducao e
-  alcance medido estao em `PROJECT_CLOSURE_2026-09-17.md`.
+- Os 3 achados do Risk Manager reportados por auditoria e reproduzidos em
+  2026-09-17 foram **corrigidos** no mesmo dia, com sign-off explicito do
+  operador: limite de confianca hibrida passou a ser exclusivo (0.50 exato nao
+  aprova mais), `technical_context` sem `rsi`/`macd` ou com ATR ausente passou a
+  bloquear a acao direcional, e payload malformado passou a retornar HOLD em vez
+  de levantar excecao. Nenhum threshold foi afrouxado; as tres correcoes deixam
+  o gate mais restritivo. Provas de reproducao pre-fix e as edicoes exatas estao
+  em `PROJECT_CLOSURE_2026-09-17.md`.
 - A particao `validation` **ja foi usada** pela campanha multiagente de
   2026-08-10. Apenas o `holdout` permanece selado e nunca avaliado.
 

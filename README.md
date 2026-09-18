@@ -28,12 +28,13 @@ observability coverage, but it has **not demonstrated a profitable strategy**.
 | Operator interfaces | Python/Textual TUI and Electron console |
 | Neural model | TCN archived as unsuccessful research |
 | RAG | Official [Hybrid RAG Engine](https://github.com/fareloj/hybrid-rag-engine); local memory remains auxiliary |
-| Latest backend validation | 438 Python tests passing |
+| Latest backend validation | 453 Python tests passing |
 | Latest desktop validation | 35 Node tests, Vite build, and Electron smoke passing |
 
-These test counts describe the state recorded on 2026-09-16 and revalidated on
-2026-09-17. They validate contracts, failure behavior, accounting, and
-interfaces. They do not measure future returns.
+These test counts describe the state revalidated on 2026-09-17, after the three
+Risk Manager findings were fixed (438 tests before that fix, +15 regression
+tests). They validate contracts, failure behavior, accounting, and interfaces.
+They do not measure future returns.
 
 The current configuration is a **paper-only experiment**. The Decision Agent
 uses Kimi K2.7 Code as the final proposal, while GLM 5.3 handles the News and
@@ -52,9 +53,11 @@ record and is superseded on the partition status by the closure record below.
 
 The consolidated closing record is in
 [Project Closure](docs/reports/PROJECT_CLOSURE_2026-09-17.md). It lists the
-commands that were rerun, the current state of the evaluation partitions, and the
-three open Risk Manager findings with their measured reachability. Those findings
-are **open, not fixed**, and touching them requires operator sign-off.
+commands that were rerun, the current state of the evaluation partitions, and
+three Risk Manager findings with their measured reachability. Those three were
+**fixed on 2026-09-17 with operator sign-off** and are covered by regression
+tests; the record keeps the pre-fix measurements so a future change cannot
+silently reintroduce them.
 
 ## Interfaces
 
@@ -114,10 +117,9 @@ The LLM does not calculate indicators, edit balances, choose arbitrary code,
 or submit an exchange order. Its structured response is validated with
 Pydantic. Across the pre-LLM checks and the Decision Agent stage, an API error,
 malformed output, missing key, stale market, or invalid numeric value fails to
-`HOLD` or aborts the cycle. That is before the Risk Manager; it is not a claim
-that every malformed payload is handled gracefully in the Risk Manager, where
-three open shape defects are documented in the [closure
-record](docs/reports/PROJECT_CLOSURE_2026-09-17.md).
+`HOLD` or aborts the cycle. Inside the Risk Manager, a malformed payload also
+fails closed: it returns `HOLD` with an audited reason instead of raising. See
+the [closure record](docs/reports/PROJECT_CLOSURE_2026-09-17.md).
 
 ## Deterministic Safety Boundary
 
@@ -590,11 +592,12 @@ dependencies are ignored by Git.
   horizon on the `development` partition, and the configured round-trip cost
   exceeded the median absolute 60-minute move. That result is one partition with
   overlapping windows and synthetic news, not a walk-forward proof.
-- Three pre-existing Risk Manager findings were reproduced on 2026-09-17 and left
-  open by operator decision: the hybrid-confidence floor is inclusive at exactly
-  `0.50`, a `technical_context` without `rsi`/`macd` passes the directional gate,
-  and a malformed payload raises instead of returning `HOLD`. Reachability is
-  measured in the [closure record](docs/reports/PROJECT_CLOSURE_2026-09-17.md).
+- Three pre-existing Risk Manager findings were reproduced and **fixed on
+  2026-09-17 with operator sign-off**: the hybrid-confidence floor was inclusive
+  at exactly `0.50`, a `technical_context` without `rsi`/`macd` passed the
+  directional gate, and a malformed payload raised instead of returning `HOLD`.
+  All three fixes make the gate stricter. Pre-fix reachability and the exact
+  edits are in the [closure record](docs/reports/PROJECT_CLOSURE_2026-09-17.md).
 - The configured fee (`PAPER_FEE_RATE=0.003`) is a configuration premise, not a
   measurement of the real account fee. It has not been confirmed against the
   exchange fee table.

@@ -111,7 +111,7 @@ def test_memory_reads_compact_audit_snapshot(monkeypatch):
             "ema_status": "BULLISH",
         },
         "data_health": {"is_market_data_stale": False, "is_news_stale": True},
-        "news_risk": {"has_negative_red_flag": False},
+        "news_risk": {"has_negative_red_flag": False, "has_untrusted_instruction": False},
         "portfolio": {"current_exposure_percentage": 12.5},
     }
     row = _row(9_940, action="BUY")

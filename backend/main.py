@@ -10,7 +10,7 @@ PROJECT_DIR = BASE_DIR.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
 from backend.agents.decision_agent import DecisionAgent, has_llm_api_key
-from backend.core.audit import serialize_payload_snapshot
+from backend.core.audit import execution_price_from_payload, serialize_payload_snapshot
 from backend.core.database import get_db_path, init_db, print_db_diagnostics
 from backend.core import database, repository
 from backend.core.market_policy import LIVE_MAX_EXPOSURE_PCT
@@ -39,7 +39,11 @@ def audit_hold_without_llm(payload: dict, reason: str):
         "system_reliability": 0.0,
         "final_confidence": 0.0,
         "executed_size": 0.0,
-        "execution_price": payload.get("technical_context", {}).get("current_price", 0.0),
+        # This runs on the abort path, which is exactly where a malformed payload
+        # shows up. A `.get(key, {})` only defaults on a MISSING key, so a
+        # present-but-None technical_context would raise here and abort the audit
+        # write, losing the record of what was rejected.
+        "execution_price": execution_price_from_payload(payload),
         "reasoning": reason,
         "payload_snapshot_json": serialize_payload_snapshot(payload),
     }

@@ -250,6 +250,27 @@ def test_hybrid_confidence_gate_matches_risk_manager_behaviour():
     blocked = manager.evaluate_order("BUY", 70, no_news_payload, current_exposure=10.0)
     assert blocked["action"] == "HOLD"
 
+    # The advertised threshold is a floor that must be EXCEEDED. A proposal
+    # landing exactly on it is held, so the console must not read as "50% is
+    # enough". Conviction 100 with a 0.5 reliability penalty is the exact case.
+    exact_payload = _risk_payload(news_context=[{"headline": "neutral"}], macd_status="NEUTRAL")
+    exact_payload["technical_context"]["current_price"] = 50000.0
+    exact_payload["technical_context"]["volatility_atr"] = {"value": 10000.0, "status": "EXTREME"}
+    at_threshold = manager.evaluate_order("SELL", 100, exact_payload, current_exposure=10.0)
+    assert at_threshold["action"] == "HOLD"
+    assert "Confianca Hibrida" in at_threshold["reason"]
+
+    # Positive control: without it this test would pass with a gate that holds
+    # everything, and it could not distinguish "exactly 0.50 is held" from
+    # "nothing is ever approved". A clean payload must still approve.
+    clean_payload = _risk_payload(news_context=[{"headline": "neutral"}], macd_status="NEUTRAL")
+    clean_payload["technical_context"]["volatility_atr"] = {"value": 100.0, "status": "NORMAL"}
+    approved = manager.evaluate_order("SELL", 90, clean_payload, current_exposure=10.0)
+    assert approved["action"] == "SELL", "gate esta bloqueando tudo"
+    assert approved["executed_size"] > 0
+    # And the margin above the floor is what lets it through: 0.90 > 0.50.
+    assert approved["reason"].startswith("Aprovado")
+
 
 def test_exposed_conviction_constants_match_the_risk_manager_class():
     gates = dashboard_state.build_risk_gates()

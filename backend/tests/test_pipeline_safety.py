@@ -19,7 +19,7 @@ from backend.agents.decision_agent import (
     replace_generic_hold_reason,
 )
 from backend.features.payload_builder import build_agent_payload, build_news_risk, sanitize_news_context
-from backend.core.audit import build_payload_snapshot
+from backend.core.audit import build_payload_snapshot, serialize_payload_snapshot
 from backend.main import audit_hold_without_llm, is_llm_technical_failure
 import backend.main as trading_main
 from backend.risk.risk_manager import RiskManager
@@ -35,7 +35,16 @@ def _compatible_payload() -> dict:
         },
         "news_context": [{"headline": "Mock headline"}],
         "data_health": {"is_market_data_stale": False, "is_news_stale": False},
-        "news_risk": {"has_negative_red_flag": False, "risk_level": "NORMAL", "matched_terms": [], "matched_headlines": []},
+        # Both risk flags are required: the real producer (`build_news_risk`)
+        # always emits them, and `{}` or a single-flag dict would read as
+        # "no injection" to the gate.
+        "news_risk": {
+            "has_negative_red_flag": False,
+            "has_untrusted_instruction": False,
+            "risk_level": "NORMAL",
+            "matched_terms": [],
+            "matched_headlines": [],
+        },
         "portfolio_context": {"max_allowed_risk_per_trade": 5.0},
     }
 
@@ -477,6 +486,7 @@ def test_directional_gate_blocks_buy_with_news_red_flag():
     payload = _compatible_payload()
     payload["news_risk"] = {
         "has_negative_red_flag": True,
+        "has_untrusted_instruction": False,
         "risk_level": "ELEVATED",
         "matched_terms": ["proibicao"],
         "matched_headlines": [],
@@ -600,6 +610,299 @@ def test_payload_snapshot_keeps_auditable_fields():
     assert snapshot["data_health"]["kline_age_seconds"] == 50
     assert snapshot["news_risk"]["matched_terms"] == ["hack"]
     assert "decision_memory" not in snapshot
+
+
+def test_payload_snapshot_survives_a_malformed_payload():
+    """The audit path must record the malformed payload, not crash on it.
+
+    `audit_hold_without_llm` runs on the pre-LLM abort path, which is exactly
+    where a broken payload would appear. An `AttributeError` here would abort
+    the write and lose the evidence of what was rejected.
+    """
+    for bad_payload in (
+        {"technical_context": None, "data_health": None, "news_risk": None, "portfolio_context": None, "news_context": None},
+        {"technical_context": "texto", "data_health": ["lista"], "news_risk": 42, "portfolio_context": "x", "news_context": "not-a-list"},
+        {"technical_context": {"rsi": None, "macd": None, "ema_crossover": None}},
+        {"news_risk": {"matched_headlines": [None, {"headline": None}]}, "news_context": [None, {"headline": "ok"}]},
+        # `matched_headlines` nao-lista estourava com `[:5]` e abortava a escrita
+        # da auditoria -- exatamente o payload que o operador precisa registrar.
+        {"news_risk": {"matched_headlines": 42, "matched_terms": "hack"}},
+        {"news_risk": {"matched_headlines": None}},
+        {"news_risk": {"matched_headlines": True}},
+        {"news_risk": {"matched_headlines": {"a": 1}}},
+        {"news_risk": {"matched_headlines": "texto"}},
+        # Entradas nao-dict na lista tambem nao podem derrubar o snapshot.
+        {"news_risk": {"matched_headlines": [None, 42, "texto", {"headline": "ok"}]}},
+    ):
+        snapshot = build_payload_snapshot(bad_payload)
+        assert snapshot["schema_version"] == 1
+        assert snapshot["technical"]["rsi_status"] is None
+        assert snapshot["recent_news"] == [] or all(
+            isinstance(item, dict) for item in snapshot["recent_news"]
+        )
+
+    # A non-dict payload is also survivable, and still serializes.
+    assert json.loads(serialize_payload_snapshot(None))["schema_version"] == 1
+
+
+def test_payload_snapshot_never_emits_a_non_finite_json_token():
+    """The stored snapshot must be strict-JSON for the Electron console.
+
+    `json.dumps` writes a bare `NaN`/`Infinity` token for a non-finite float.
+    Python's `json.loads` accepts it, but `JSON.parse` in the Electron main
+    process rejects it. `serialize_payload_snapshot` runs `allow_nan=False`, so a
+    field that keeps a non-finite value does not merely emit a bad token: it
+    raises and aborts the audit write.
+    """
+    from backend.core.audit import serialize_payload_snapshot
+
+    payload = {
+        "technical_context": {
+            "current_price": float("nan"),
+            "rsi": {"value": float("inf"), "status": "NEUTRAL"},
+            "macd": {"histogram": float("-inf"), "status": "NEUTRAL"},
+            "ema_crossover": {"status": "NEUTRAL"},
+            "volatility_atr": {"value": float("inf"), "status": "NORMAL"},
+        },
+        "data_health": {
+            "kline_age_seconds": float("nan"),
+            "news_age_seconds": float("inf"),
+            "is_market_data_stale": False,
+            "is_news_stale": False,
+        },
+        "news_risk": {"has_negative_red_flag": False, "matched_terms": [], "matched_headlines": []},
+        "news_context": [{"timestamp": float("nan"), "headline": "x", "source": "pytest"}],
+        "portfolio_context": {
+            "current_exposure_percentage": float("nan"),
+            "equity_brl": float("inf"),
+            "daily_reference_equity_brl": float("-inf"),
+            "daily_reference_timestamp": float("nan"),
+            "daily_drawdown_percentage": float("nan"),
+            "daily_drawdown_limit_percentage": float("inf"),
+        },
+    }
+
+    raw = serialize_payload_snapshot(payload)
+    # `parse_constant` is only called for the non-standard tokens; raising there
+    # is how a strict parser rejects them.
+    def _reject(token):
+        raise AssertionError(f"snapshot emitted a non-finite token: {token}")
+
+    parsed = json.loads(raw, parse_constant=_reject)
+    assert "NaN" not in raw and "Infinity" not in raw
+
+    # Non-finite numerics are recorded as null (unknown), never as 0.
+    assert parsed["technical"]["current_price"] is None
+    assert parsed["technical"]["volatility_atr"]["value"] is None
+    assert parsed["technical"]["volatility_atr"]["status"] == "NORMAL"
+    assert parsed["portfolio"]["equity_brl"] is None
+    assert parsed["recent_news"][0]["timestamp"] is None
+
+    # Scalar non-finite and scalar finite keep their shape.
+    scalar_inf = build_payload_snapshot({"technical_context": {"volatility_atr": float("inf")}})
+    assert scalar_inf["technical"]["volatility_atr"] is None
+    scalar_ok = build_payload_snapshot({"technical_context": {"volatility_atr": 1000.0}})
+    assert scalar_ok["technical"]["volatility_atr"] == 1000.0
+    # A non-numeric scalar is preserved verbatim (valid JSON, keeps the evidence).
+    scalar_text = build_payload_snapshot({"technical_context": {"volatility_atr": "manual"}})
+    assert scalar_text["technical"]["volatility_atr"] == "manual"
+
+    # `True` is not a number. The gate rejects it, so the snapshot must record
+    # "unknown" rather than a calm 1.0 that disagrees with the decision.
+    assert build_payload_snapshot({"technical_context": {"volatility_atr": True}})["technical"]["volatility_atr"] is None
+    assert build_payload_snapshot(
+        {"technical_context": {"volatility_atr": {"value": True, "status": "NORMAL"}}}
+    )["technical"]["volatility_atr"]["value"] is None
+
+
+def test_payload_snapshot_survives_non_finite_values_in_verbatim_fields():
+    """No field may abort the audit write, including ones copied verbatim.
+
+    The per-field sanitizers cover the fields that exist today. `json_safe` is
+    the recursive backstop: `allow_nan=False` would otherwise turn a non-finite
+    float anywhere in the snapshot -- including in a `status`, a `source`, a
+    boolean flag or a `matched_terms` item -- into a raise that loses the record.
+    """
+    from backend.core.audit import serialize_payload_snapshot
+
+    hostile = {
+        "technical_context": {
+            "current_price": 40000.0,
+            "rsi": {"status": float("inf"), "value": float("nan")},
+            "macd": {"status": float("-inf")},
+            "volatility_atr": {"status": float("inf")},
+        },
+        "data_health": {"is_market_data_stale": float("inf"), "is_news_stale": float("nan")},
+        "news_risk": {
+            "has_negative_red_flag": float("inf"),
+            "risk_level": float("inf"),
+            "matched_terms": [float("inf"), "hack"],
+            "matched_headlines": [{"headline": "x", "source": float("inf"), "matched_terms": [float("nan")]}],
+        },
+        "news_context": [{"headline": "x", "source": float("inf"), "timestamp": float("nan")}],
+        "portfolio_context": {
+            "is_in_drawdown": float("inf"),
+            "equity_snapshot_id": float("inf"),
+            "daily_reference_timestamp": float("nan"),
+        },
+    }
+
+    raw = serialize_payload_snapshot(hostile)
+
+    def _reject(token):
+        raise AssertionError(f"snapshot emitted a non-finite token: {token}")
+
+    parsed = json.loads(raw, parse_constant=_reject)
+    assert parsed["portfolio"]["is_in_drawdown"] is None
+    assert parsed["portfolio"]["equity_snapshot_id"] is None
+    assert parsed["news_risk"]["risk_level"] is None
+
+    # Values that are genuinely not JSON-serializable are coerced, not fatal.
+    exotic = {
+        "technical_context": {"volatility_atr": b"bytes", "rsi": {"status": {"nested": "mapping"}}},
+        "news_context": [{"headline": b"headline-bytes", "source": {"not": "a string"}}],
+    }
+    exotic_raw = serialize_payload_snapshot(exotic)
+    exotic_parsed = json.loads(exotic_raw)
+    assert exotic_parsed["technical"]["volatility_atr"] is None
+    assert isinstance(exotic_parsed["recent_news"][0]["headline"], str)
+
+
+def test_payload_snapshot_survives_cycles_and_deep_nesting():
+    """A cycle or a deep bomb must not abort the audit write either.
+
+    `json_safe` recurses, so an unbounded input would raise `RecursionError` --
+    uncaught by every caller -- and lose the row on the pre-LLM abort path. The
+    depth budget and the path set collapse those containers to None instead.
+    """
+    from backend.core.audit import serialize_payload_snapshot
+
+    circular: dict = {}
+    circular["self"] = circular
+    nested_deep: dict = {}
+    cursor = nested_deep
+    for _ in range(600):
+        cursor["n"] = {}
+        cursor = cursor["n"]
+
+    for label, payload in (
+        ("circular risk_level", {"news_risk": {"risk_level": circular}}),
+        ("circular source", {"news_risk": {"matched_headlines": [{"headline": "h", "source": circular}]}}),
+        ("circular news item", {"news_context": [circular]}),
+        ("deep 600", {"news_risk": {"risk_level": nested_deep}}),
+        ("deep inside technical", {"technical_context": {"volatility_atr": nested_deep}}),
+    ):
+        raw = serialize_payload_snapshot(payload)
+        json.loads(raw)  # must be valid JSON, and must not raise
+        assert raw, label
+
+    # A shared (non-circular) reference is duplicated, not treated as a cycle.
+    shared = {"value": 1}
+    repeated = serialize_payload_snapshot({"news_risk": {"matched_terms": ["a"], "risk_level": shared}})
+    assert json.loads(repeated)["news_risk"]["risk_level"] == {"value": 1}
+
+
+def test_payload_snapshot_survives_hostile_dunders():
+    """A value whose `__str__`/`__float__`/`items()` raises must not abort the row.
+
+    `json.dumps` runs `str()` and `float()` internally, so an exception from a
+    dunder propagates straight out of the serialization and loses the audit
+    write. `json_safe` and `_finite_or_none` guard every coercion.
+    """
+    from backend.core.audit import serialize_payload_snapshot
+
+    class StrBoom:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    class FloatBoom:
+        def __float__(self):
+            raise RuntimeError("boom")
+
+    class ItemsBoom(dict):
+        def items(self):
+            raise RuntimeError("boom")
+
+    hostile = {
+        "technical_context": {"current_price": FloatBoom(), "rsi": {"status": StrBoom()}},
+        "news_risk": {"risk_level": StrBoom(), "matched_terms": [StrBoom()]},
+        "news_context": [{"headline": StrBoom(), "source": StrBoom()}],
+        "portfolio_context": {"equity_brl": FloatBoom()},
+    }
+    raw = serialize_payload_snapshot(hostile)
+    parsed = json.loads(raw)
+    # Uncoercible leaves become null, never a crash and never a fabricated 0.
+    assert parsed["technical"]["current_price"] is None
+    assert parsed["portfolio"]["equity_brl"] is None
+
+    # A hostile mapping subclass is rebuilt, not crashed on.
+    assert json.loads(serialize_payload_snapshot({"news_risk": ItemsBoom({"a": 1})})) is not None
+    # A hostile key is stringified or replaced, never fatal.
+    hostile_key = {StrBoom(): "value"}
+    assert json.loads(serialize_payload_snapshot({"news_risk": hostile_key})) is not None
+
+
+def test_payload_snapshot_survives_hostile_container_subclasses():
+    """A `dict`/`list` subclass can override `get`/`__getitem__` and raise.
+
+    `isinstance` accepts subclasses, so a `HostileDict.get` raising `RuntimeError`
+    propagated out of `build_payload_snapshot` and lost the row. The readers now
+    require the exact builtin type, and `serialize_payload_snapshot` has a last
+    resort that records the failure instead of the payload.
+    """
+    from backend.core.audit import serialize_payload_snapshot
+
+    class HostileDict(dict):
+        def get(self, *args, **kwargs):
+            raise RuntimeError("get boom")
+
+    class HostileList(list):
+        def __getitem__(self, item):
+            raise RuntimeError("slice boom")
+
+    for label, payload in (
+        ("top-level hostile dict", HostileDict({"a": 1})),
+        ("nested hostile technical_context", {"technical_context": HostileDict({"current_price": 1.0})}),
+        ("hostile matched_headlines", {"news_risk": HostileDict({"matched_headlines": HostileList([1, 2])})}),
+        ("hostile news_context", {"news_context": HostileList([{"headline": "x"}])}),
+        ("hostile portfolio_context", {"portfolio_context": HostileDict({"equity_brl": 1.0})}),
+    ):
+        parsed = json.loads(serialize_payload_snapshot(payload))
+        assert parsed["schema_version"] == 1, label
+
+    # Ordinary subclasses are still handled without losing the row.
+    class PlainSubclass(dict):
+        pass
+
+    parsed = json.loads(serialize_payload_snapshot({"news_risk": PlainSubclass({"risk_level": "NORMAL"})}))
+    assert parsed["schema_version"] == 1
+
+    # Legitimate data still round-trips exactly.
+    good = serialize_payload_snapshot(
+        {"technical_context": {"current_price": 40000.0, "ema_crossover": {"status": "BEARISH"}}}
+    )
+    good_parsed = json.loads(good)
+    assert good_parsed["technical"]["current_price"] == 40000.0
+    assert good_parsed["technical"]["ema_status"] == "BEARISH"
+
+
+def test_execution_price_reader_fails_closed_on_a_malformed_payload():
+    """The abort-path price read must not raise; the audit row still gets written."""
+    from backend.core.audit import execution_price_from_payload
+
+    assert execution_price_from_payload({"technical_context": {"current_price": 400000.0}}) == 400000.0
+    for bad in (
+        None,
+        {},
+        {"technical_context": {}},
+        {"technical_context": None},
+        {"technical_context": "texto"},
+        {"technical_context": {"current_price": None}},
+        {"technical_context": {"current_price": "abc"}},
+        {"technical_context": {"current_price": float("nan")}},
+        {"technical_context": {"current_price": float("inf")}},
+    ):
+        assert execution_price_from_payload(bad) == 0.0, f"{bad!r} nao fechou"
 
 
 def test_init_db_migrates_existing_trade_logs_snapshot_column():

@@ -92,7 +92,15 @@ def base_payload() -> dict:
             "is_news_stale": False,
             "news_stale_threshold_seconds": 21600,
         },
-        "news_risk": {"has_negative_red_flag": False, "risk_level": "NORMAL", "matched_terms": [], "matched_headlines": []},
+        # Both flags are required: the real producer (`build_news_risk`) always
+        # emits them, and the gate fails closed when one is missing.
+        "news_risk": {
+            "has_negative_red_flag": False,
+            "has_untrusted_instruction": False,
+            "risk_level": "NORMAL",
+            "matched_terms": [],
+            "matched_headlines": [],
+        },
         "portfolio_context": {
             "current_exposure_percentage": 20.0,
             "is_in_drawdown": False,

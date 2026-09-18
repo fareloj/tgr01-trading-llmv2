@@ -158,7 +158,7 @@ function CostRealityPanel({ state, logs }) {
         <small>Conviccao minima para executar</small>
         <strong>{outlook.required == null ? "--" : `${outlook.required}%`}</strong>
         <p>{outlook.source === "unknown" ? "snapshot indisponivel" : outlook.source === "no_news" ? "sem noticias no payload" : "gate padrao do Risk Manager"}</p>
-        <em>hibrida minima {formatPercent(gates.minimum_hybrid_confidence_pct)} · drawdown {formatPercent(gates.max_daily_drawdown_pct)}</em>
+        <em>hibrida acima de {formatPercent(gates.minimum_hybrid_confidence_pct)} · drawdown {formatPercent(gates.max_daily_drawdown_pct)}</em>
       </div>
 
       <div className="cost-block">
