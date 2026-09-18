@@ -104,11 +104,16 @@ def json_safe(value, _depth: int = 0, _seen: frozenset | None = None):
 
 
 def _safe_key(key) -> str:
-    """Stringify a dict key without letting a hostile `__str__` escape."""
-    if isinstance(key, str):
+    """Stringify a dict key without letting a hostile dunder escape.
+
+    Returns a plain `str`, never a subclass: `json.dumps(sort_keys=True)` sorts
+    the keys, and a `str` subclass with a hostile `__lt__` would raise there,
+    outside the per-value guards.
+    """
+    if type(key) is str:
         return key
     try:
-        return str(key)
+        return str(str(key))
     except Exception:
         return "<unprintable-key>"
 
@@ -307,12 +312,19 @@ def serialize_payload_snapshot(payload: dict) -> str:
     """
     try:
         snapshot = json_safe(build_payload_snapshot(payload))
+        return json.dumps(
+            snapshot,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            allow_nan=False,
+        )
     except Exception:
-        snapshot = {"schema_version": 1, "snapshot_error": "unreadable payload"}
-    return json.dumps(
-        snapshot,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-        allow_nan=False,
-    )
+        # The `json.dumps` call is inside the guard too: `sort_keys=True` sorts
+        # the keys and can run a hostile `__lt__`, and `allow_nan=False` raises
+        # on a non-finite value a future field forgot to sanitize.
+        return json.dumps(
+            {"schema_version": 1, "snapshot_error": "unreadable payload"},
+            separators=(",", ":"),
+            sort_keys=True,
+        )

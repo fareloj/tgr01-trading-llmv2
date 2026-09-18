@@ -385,7 +385,7 @@ old-vs-new comparison was swept over 159,070 payload/action combinations: **zero
 cases where the new code approves something the old code held or raised**, zero
 new exceptions, 29,319 newly stricter.
 
-Those reviews found sixteen more shapes of the same defect class, now also fixed
+Those reviews found twenty-one more shapes of the same defect class, now also fixed
 and tested:
 
 1. A non-list `matched_headlines` aborted the audit write.
@@ -461,6 +461,34 @@ and tested:
     `max_exposure` and used it in `min(...)`, raising `TypeError` between `str`
     and `float`. Both checks now use the sanitized value, and the invalid-action
     reason interpolates the sanitized action rather than the raw argument.
+
+A post-commit adversarial pass on the fix itself found five more, four of them
+introduced by the fix rather than pre-existing. They are fixed in the follow-up
+commit:
+
+- **The numeric-string acceptance was itself a relaxation.** `safe_float`
+  accepted `"85"`, so an exposure or conviction that `HEAD` raised on became an
+  approval. The risk inputs (conviction, exposure, sizing limit, drawdown) now
+  pass `allow_numeric_string=False`: a string is rejected, which restores the
+  fail-closed direction.
+- **The sizing limit still defaulted to `5.0`.** An empty or partial
+  `portfolio_context` approved at 5% on a value the payload never carried. The
+  key is now required, and every producer emits it.
+- **A hostile `str` subclass in `volatility_atr.status` escaped.** the status is
+  compared with `==`, which runs `__eq__`. `_atr_status` now requires an exact
+  `str`, matching the RSI/MACD rule.
+- **A hostile dict key could still raise through `.get()`.** `dict.get` runs
+  `__eq__` on colliding keys. `evaluate_order` and `calculate_system_reliability`
+  now wrap their whole body in an exception boundary, so the public readers are
+  fail-closed by construction rather than by enumeration.
+- **`json.dumps(sort_keys=True)` sorted keys outside the guard.** `_safe_key`
+  now returns a plain `str`, and the `dumps` call is inside the same guard as the
+  snapshot build.
+
+The last two matter more than the individual bug: after four rounds of patching
+shapes one at a time, the honest fix was to stop enumerating and put a boundary
+around each public reader. The readers now cannot raise regardless of what a
+future shape does.
 
 Findings 10 through 16 were only found because the reviews kept attacking the
 "never raises" and "absent is not benign" claims. The guarantees are now

@@ -744,6 +744,27 @@ def test_unhashable_indicator_status_fails_closed():
             _payload(rsi_status, macd_status, red_flag=True), action="SELL"
         ) in (0.0, 0.7, 1.0)
 
+    # O status do ATR tambem precisa ser `str` exato: uma subclasse com `__eq__`
+    # hostil explode na comparacao com "EXTREME". O status hostil e descartado
+    # (vira None), entao quem decide passa a ser o ratio -- e com ratio extremo
+    # o BUY tem de fechar mesmo assim.
+    class EqBoom(str):
+        def __eq__(self, other):
+            raise RuntimeError("eq boom")
+
+    hostile_atr_status = _payload("NEUTRAL", "BULLISH_EXPANDING")
+    hostile_atr_status["technical_context"]["volatility_atr"] = {
+        "value": 10000.0,  # 10000 / 50000 = 0.20, extremo
+        "status": EqBoom("NORMAL"),
+    }
+    held = rm.evaluate_order("BUY", 90, hostile_atr_status, current_exposure=10.0)
+    assert held["action"] == "HOLD"
+    assert "ATR EXTREME" in held["reason"]
+    # Com status hostil e ATR pequeno, o status e ignorado e o BUY aprova.
+    benign_atr = _payload("NEUTRAL", "BULLISH_EXPANDING")
+    benign_atr["technical_context"]["volatility_atr"] = {"value": 100.0, "status": EqBoom("NORMAL")}
+    assert rm.evaluate_order("BUY", 90, benign_atr, current_exposure=10.0)["action"] == "BUY"
+
     # Controle positivo: status validos continuam decidindo normalmente.
     assert rm.evaluate_order("BUY", 90, _payload("NEUTRAL", "BULLISH_EXPANDING"), current_exposure=10.0)["action"] == "BUY"
     blocked_sell = rm.evaluate_order("SELL", 90, _payload("NEUTRAL", "BULLISH_EXPANDING"), current_exposure=10.0)
@@ -751,12 +772,14 @@ def test_unhashable_indicator_status_fails_closed():
     assert "MACD BULLISH_EXPANDING" in blocked_sell["reason"]
 
 
-def test_numeric_string_exposure_is_used_in_size_and_cap_checks():
-    """Achado 2026-09-17: `current_exposure` cru era reusado apos o saneamento.
+def test_risk_inputs_reject_strings_instead_of_coercing_them():
+    """Achados 2026-09-17: os inputs de risco nao aceitam string numerica.
 
-    `safe_float` aceita string numerica, mas o valor cru era comparado com
-    `max_exposure` e usado em `min(...)`, o que levanta TypeError entre str e
-    float. Agora as duas checagens usam o `exposure` saneado.
+    `safe_float` aceita string por padrao, e a primeira versao do fix deixou
+    `current_exposure`/`conviction` passarem como string convertida. Isso
+    transformava um `TypeError` do `HEAD` em aprovacao -- uma relaxacao. Os
+    inputs de risco (conviccao, exposicao, limite por trade, drawdown) usam
+    `allow_numeric_string=False` porque o pipeline sempre passa numeros.
     """
     rm = RiskManager(max_exposure=80.0, cooldown_minutes=0)
 
@@ -774,16 +797,37 @@ def test_numeric_string_exposure_is_used_in_size_and_cap_checks():
             "portfolio_context": {"max_allowed_risk_per_trade": 5.0},
         }
 
-    # String numerica nao pode levantar; acima do teto, bloqueia.
-    above = rm.evaluate_order("BUY", 90, _payload(), "85")
+    for label, result in (
+        ("exposure '30'", rm.evaluate_order("BUY", 90, _payload(), "30")),
+        ("exposure '85'", rm.evaluate_order("BUY", 90, _payload(), "85")),
+        ("exposure '30' SELL", rm.evaluate_order("SELL", 90, _payload(), "30")),
+        ("conviction '90'", rm.evaluate_order("BUY", "90", _payload(), 10.0)),
+    ):
+        assert result["action"] == "HOLD", f"{label} nao fechou"
+        assert result["executed_size"] == 0.0
+        assert "Risk input" in result["reason"], result["reason"]
+
+    # Limite por trade ausente ou nao numerico fecha, sem default.
+    for label, portfolio in (
+        ("portfolio vazio", {}),
+        ("sem a chave", {"other": 1}),
+        ("string", {"max_allowed_risk_per_trade": "5"}),
+        ("None", {"max_allowed_risk_per_trade": None}),
+    ):
+        payload = _payload()
+        payload["portfolio_context"] = portfolio
+        blocked = rm.evaluate_order("BUY", 90, payload, 10.0)
+        assert blocked["action"] == "HOLD", f"{label} nao fechou"
+        assert "Limite por trade" in blocked["reason"], blocked["reason"]
+
+    # Controle positivo: numeros reais continuam funcionando nos dois limites.
+    above = rm.evaluate_order("BUY", 90, _payload(), 85.0)
     assert above["action"] == "HOLD"
     assert "Teto de alocacao" in above["reason"]
-    # Abaixo do teto, aprova e dimensiona com o valor convertido.
-    below = rm.evaluate_order("BUY", 90, _payload(), "30")
+    below = rm.evaluate_order("BUY", 90, _payload(), 30.0)
     assert below["action"] == "BUY"
     assert below["executed_size"] == 5.0
-    # SELL usa o valor convertido no `min(...)`.
-    sell = rm.evaluate_order("SELL", 90, _payload(), "2.5")
+    sell = rm.evaluate_order("SELL", 90, _payload(), 2.5)
     assert sell["action"] == "SELL"
     assert sell["executed_size"] == 2.5
 

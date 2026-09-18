@@ -53,19 +53,26 @@ def usable_news_count(news: object) -> int:
     return count
 
 
-def safe_float(value) -> float | None:
+def safe_float(value, *, allow_numeric_string: bool = True) -> float | None:
     """Coerce a numeric payload value to a finite float, or None when unusable.
 
     `float()` runs arbitrary code: a subclass with a hostile `__float__` raises
     something the callers' `except (TypeError, ValueError, OverflowError)` does
     not catch, and the exception aborts the cycle instead of producing the
-    audited HOLD. Only real numeric types and non-blank numeric strings are
-    accepted; everything else becomes None, which each caller turns into its own
-    fail-closed reason.
+    audited HOLD. Only real numeric types and, when allowed, non-blank numeric
+    strings are accepted; everything else becomes None, which each caller turns
+    into its own fail-closed reason.
+
+    `allow_numeric_string=False` is used for the risk inputs (conviction,
+    exposure, sizing, drawdown). Those must be numbers: HEAD raised `TypeError`
+    on a string, and accepting one would turn a crash into an approval, which is
+    a relaxation. The live pipeline always passes numbers there.
     """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, str):
+        if not allow_numeric_string:
+            return None
         try:
             if value.strip() == "":
                 return None
@@ -118,13 +125,19 @@ class RiskManager:
         self.cooldown_minutes = cooldown_minutes
 
     def calculate_system_reliability(self, payload: dict, action: str | None = None) -> float:
-        """
-        Calcula o penalizador de confianca baseado na saude dos dados em tempo real.
-        Retorna um valor entre 0.0 e 1.0.
+        """Fail-closed reliability score in [0.0, 1.0]; this method never raises.
 
         A malformed payload returns 0.0 (maximum penalty) rather than raising.
-        A structural field that cannot be read is not evidence of health.
+        A structural field that cannot be read is not evidence of health. The
+        exception boundary covers `__eq__`/`__hash__` overrides on a hostile key,
+        which a plain `.get()` can still trigger.
         """
+        try:
+            return self._calculate_system_reliability(payload, action)
+        except Exception:
+            return 0.0
+
+    def _calculate_system_reliability(self, payload: dict, action: str | None = None) -> float:
         if type(payload) is not dict:
             return 0.0
         reliability = 1.0
@@ -186,9 +199,9 @@ class RiskManager:
         Calcula o Kelly Fracionado para definir o tamanho seguro da aposta.
         Retorna a porcentagem da banca que deve ser alocada na ordem.
         """
-        win_rate = safe_float(win_rate)
-        risk_reward_ratio = safe_float(risk_reward_ratio)
-        fraction = safe_float(fraction)
+        win_rate = safe_float(win_rate, allow_numeric_string=False)
+        risk_reward_ratio = safe_float(risk_reward_ratio, allow_numeric_string=False)
+        fraction = safe_float(fraction, allow_numeric_string=False)
         if win_rate is None or risk_reward_ratio is None or fraction is None:
             return 0.0
         if not 0 < win_rate < 1 or risk_reward_ratio <= 0 or not 0 < fraction <= 1:
@@ -202,16 +215,22 @@ class RiskManager:
         return kelly_perc * fraction * 100.0
 
     def evaluate_order(self, llm_action: str, llm_conviction: int, payload: dict, current_exposure: float) -> dict:
-        """
-        A muralha deterministica: onde o LLM e barrado pela matematica e pela saude dos dados.
+        """Fail-closed entry point: this method never raises.
 
-        A malformed payload must fail closed. Every field the gate reads is
-        coerced through `_as_mapping` first, so a missing key, an explicit
-        `None`, or a value of the wrong type produces a HOLD with a reason
-        instead of an uncaught `AttributeError`/`TypeError`. Until 2026-09-17
-        several shapes raised here, and a crash is not an audited safety
-        decision.
+        A malformed payload must produce a HOLD with an audited reason. Every
+        field is coerced defensively, and the whole evaluation runs inside an
+        exception boundary as a last resort: an in-process object can override
+        `__eq__`/`__hash__`/`__getattr__`, so a shape nobody anticipated must
+        still produce a decision rather than aborting an otherwise auditable
+        cycle. Until 2026-09-17 several shapes raised here, and a crash is not an
+        audited safety decision.
         """
+        try:
+            return self._evaluate_order(llm_action, llm_conviction, payload, current_exposure)
+        except Exception:
+            return self._hold("Risk Manager nao conseguiu avaliar o payload (malformado).")
+
+    def _evaluate_order(self, llm_action: str, llm_conviction: int, payload: dict, current_exposure: float) -> dict:
         # `str()` runs arbitrary code: a `str` subclass whose `__str__` raises
         # would abort the cycle. The action is Pydantic-validated upstream, so
         # this is belt and braces, but it keeps the "never raise" guarantee.
@@ -224,12 +243,18 @@ class RiskManager:
         if portfolio is None:
             return self._hold("portfolio_context ausente ou malformado.")
 
-        conviction = safe_float(llm_conviction)
-        exposure = safe_float(current_exposure)
+        conviction = safe_float(llm_conviction, allow_numeric_string=False)
+        exposure = safe_float(current_exposure, allow_numeric_string=False)
         if conviction is None or exposure is None:
             return self._hold("Risk input invalido, nao numerico ou nao finito.")
-        raw_max_allowed = portfolio.get("max_allowed_risk_per_trade", 5.0)
-        max_allowed = safe_float(raw_max_allowed)
+        # M2: no default. An absent or non-numeric sizing limit is absent safety
+        # evidence; defaulting to 5.0 approved on a value the payload never
+        # carried. Every producer emits this key.
+        if "max_allowed_risk_per_trade" not in portfolio:
+            return self._hold("Limite por trade ausente no portfolio_context.")
+        max_allowed = safe_float(
+            portfolio.get("max_allowed_risk_per_trade"), allow_numeric_string=False
+        )
         if max_allowed is None:
             return self._hold("Limite por trade invalido, nao numerico ou nao finito.")
         if not 0 <= conviction <= 100:
@@ -250,7 +275,7 @@ class RiskManager:
         if action == "BUY":
             drawdown = portfolio.get("daily_drawdown_percentage")
             if drawdown is not None:
-                drawdown = safe_float(drawdown)
+                drawdown = safe_float(drawdown, allow_numeric_string=False)
                 if drawdown is None or drawdown < 0:
                     return self._hold("Drawdown diario invalido, nao numerico ou nao finito.")
                 if drawdown >= self.max_daily_drawdown:
@@ -533,7 +558,13 @@ class RiskManager:
         """
         if type(payload) is not dict:
             return None
-        value = payload.get(key)
+        # `payload.get(key)` runs `__eq__` on every colliding key. A hostile key
+        # whose hash matches can raise, so the lookup itself is guarded: an
+        # exception reading a field is malformed evidence, not a crash.
+        try:
+            value = payload.get(key)
+        except Exception:
+            return None
         return value if type(value) is dict else None
 
     @staticmethod
@@ -588,7 +619,9 @@ class RiskManager:
         atr = tech.get("volatility_atr")
         if type(atr) is dict:
             status = atr.get("status")
-            return status if isinstance(status, str) else None
+            # Exact `str`: a subclass can define a hostile `__eq__`, and the
+            # caller compares this against "EXTREME".
+            return status if type(status) is str else None
         return None
 
     def _atr_is_extreme(self, tech: dict) -> bool:
