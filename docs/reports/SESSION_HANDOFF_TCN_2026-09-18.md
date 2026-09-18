@@ -91,10 +91,11 @@ task, and it is the step most likely to fail.
 What does exist:
 
 - **Local BTC/BRL 1-minute data**: `backend/data_exports/mercado_bitcoin_btc_brl_1m/`
-  (43.5 MB, a merged `btc_brl_1m.csv` plus 29 chunk files).
+  (43.5 MB; a merged `btc_brl_1m.csv` at the top level, `manifest.json`, and
+  **27** csv files under `chunks/`).
   Range: **2026-03-01 to 2026-09-01** (185 days).
   Coverage measured: **192,161 rows out of 266,400 expected minutes = 72.13%**,
-  36,498 gaps, largest gap 222 minutes.
+  36,498 gaps, largest row-to-row jump 222 minutes (221 missing minutes).
 - The chunk directory that `build_tcn_sequence_dataset.py` reads by default.
 
 The coverage number matters: the archived experiment used 969,131 local rows.
@@ -102,35 +103,76 @@ You have roughly a fifth of that, over 185 days, with a quarter of the minutes
 missing. Any comparison against the archived numbers is therefore not
 apples-to-apples, and the report must say so.
 
-### Regenerating the datasets, in order
+### Regenerating the datasets
+
+**Read this whole subsection before running anything: the regeneration chain is
+broken and was verified broken by execution, not by reading.**
+
+What still works unchanged:
 
 ```powershell
-# 1. Local featured dataset (this consumes the raw csv, so use a raw path that exists)
+# Local featured dataset. Reads chunks via --chunks-dir by default (the default
+# path exists); it takes no raw-csv positional argument, so do not pass one.
 & ".\.venv\Scripts\python.exe" .\backend\tests\build_tcn_sequence_dataset.py
 # -> backend/reports/mb_tcn_dataset.csv
 
-# 2. Global BTCUSDT dataset. Requires network; downloads checksum-verified
-#    monthly archives from Binance. Bound it for a smoke test first.
-& ".\.venv\Scripts\python.exe" .\backend\tests\download_binance_history.py `
-  --from-month 2026-03 --to-month 2026-09 --max-months 3
-# -> backend/data_exports/binance_btcusdt_1m/ (merged csv inside)
-
-# 3. Barrier targets for both (the archived path, note the barrier values)
+# Barrier targets from the local dataset (the archived line's target path)
 & ".\.venv\Scripts\python.exe" .\backend\tests\build_barrier_targets.py `
   .\backend\reports\mb_tcn_dataset.csv `
   --output .\backend\reports\mb_barrier_targets.npz `
   --horizons 15 60 --barrier-pct 0.20 0.40
-
-# 4. Slow-horizon dataset (the protocol's cadence and horizons)
-& ".\.venv\Scripts\python.exe" .\backend\tests\build_slow_tcn_dataset.py `
-  --cadence-minutes 15 --horizons 240 1440 --actionable-move-pct 0.25
-# -> backend/reports/mb_slow_tcn_v2.csv
 ```
 
-If the Binance download fails (no network, or the archive layout changed), **say
-so and stop that branch**. Do not substitute another exchange silently: mixing
-providers changes the experiment's semantics, which is a documented limitation
-in `FINAL_ACCEPTANCE.md`.
+**The global dataset cannot be produced by any script in this repository.**
+Verified: `binance_full_dataset.csv` is referenced only as a *default input* by
+`build_slow_tcn_dataset.py:24` and `train_tcn.py:55`. Nothing writes it. The
+closest producer, `download_binance_history.py`, writes a merged
+`btc_usdt_1m.csv` under `backend/data_exports/binance_btcusdt_1m/` using
+`market_history.CSV_FIELDS`, which has **no `is_observed` column** -- and
+`build_slow_tcn_dataset.py:49` requires exactly
+`usecols=["timestamp", "close", "is_observed"]`. Reproduced: running the slow
+builder with the documented flags and no `--global-dataset` fails with
+
+```
+FileNotFoundError: 'D:\tgr01-trading-llmv2\backend\reports\binance_full_dataset.csv'
+```
+
+So step 4 of the old ordered list could never run. The consequences for the
+five missing artifacts:
+
+| Missing artifact | Has a producing command? |
+| --- | --- |
+| `mb_tcn_dataset.csv` | **yes**, `build_tcn_sequence_dataset.py` |
+| `mb_barrier_targets.npz` | **yes**, `build_barrier_targets.py` |
+| `binance_full_dataset.csv` | **no** |
+| `binance_barrier_targets.npz` | **no** (needs the file above) |
+| `tcn_barrier_final/local_best.pt` | **no** (needs a full CUDA train) |
+
+Your options, in order of preference:
+
+1. **Skip the global domain for the slow line and document it.** The reopening
+   protocol says global pretraining is "an ablation, not an assumption", so
+   omitting it is permitted *if stated*. But note the builder currently
+   **hard-requires** a global file, so skipping means either passing a
+   synthetic global frame (constant close, `is_observed` true) or making the
+   global argument optional in the builder. The second is a code change and
+   therefore a reviewed commit, not a throwaway edit. Decide deliberately and
+   record which you chose.
+2. **Build the missing global file yourself** from the Binance download by
+   adding `is_observed` and writing it to `backend/reports/binance_full_dataset.csv`.
+   That is also a code change, and it must preserve the causal semantics: an
+   `is_observed` flag must reflect whether the source actually had that minute.
+3. **Do not use the slow line at all** and stay on the archived 1-minute line,
+   which needs only the local dataset. This is the lowest-risk path if the goal
+   is to reproduce the baseline.
+
+There is a fourth, worse option: silently substituting another exchange or a
+synthetic global series without saying so. Mixing providers changes the
+experiment's semantics, which `docs/reports/FINAL_ACCEPTANCE.md` already lists as a
+limitation. Do not do that.
+
+If the Binance download itself fails (no network, or the archive layout
+changed), say so and stop that branch.
 
 ### Which path to take
 
@@ -143,9 +185,13 @@ mixing them:
 - **The slow line** (`train_slow_tcn_v2.py` + `build_slow_tcn_dataset.py`). This
   is the reopening protocol's answer to the objective mismatch: 15-minute
   decision cadence, 240-minute and 1440-minute horizons, sequence length 48,
-  synchronized global features. **This already exists and is tested** -- 36 TCN
-  tests pass, including three that specifically assert the slow dataset's
-  causality and cadence.
+  synchronized global features. **The dataset half is implemented and tested**
+  -- 36 TCN tests pass, including three that specifically assert the slow
+  dataset's causality and cadence. **The trainer half is implemented but has no
+  test coverage at all**: verified, `train_slow_tcn_v2.py` is referenced by no
+  test, import or script anywhere in the repository except this document. Its
+  correctness is unproven, so read it before trusting its output, and add a
+  test for anything you rely on.
 
 The protocol was written because the archived direction head learned first-touch
 barrier classes while the economic policy ignored that head. The slow line is
@@ -160,14 +206,18 @@ This is the most important section for saving time. The reopening protocol is
 | Component | File | Status |
 | --- | --- | --- |
 | Causal slow-horizon dataset | `backend/ml/slow_dataset.py` | implemented, tested |
-| Dataset builder | `backend/tests/build_slow_tcn_dataset.py` | implemented, tested |
+| Dataset builder (CLI wrapper) | `backend/tests/build_slow_tcn_dataset.py` | implemented; the library it calls is tested, the CLI wrapper is not |
 | Purged walk-forward folds | `backend/ml/sequences.py` | implemented, tested |
 | Safe checkpoint schema | `backend/ml/checkpoints.py` | implemented, tested |
 | Abstaining probability policy | `backend/ml/policy.py` | implemented, tested |
 | Policy threshold fitting on calibration only | `policy.fit_probability_policy` | implemented, tested |
 | Fail-closed advisor | `backend/ml/inference.py` | implemented, tested |
 | Readiness gate | `backend/ml/readiness.py` | implemented, tested |
-| Slow training entry point | `backend/tests/train_slow_tcn_v2.py` | implemented, tested |
+| Slow training entry point | `backend/tests/train_slow_tcn_v2.py` | **implemented, NOT tested** |
+
+The "not tested" row is measured, not a guess: a full-tree search finds no test,
+import or script that references `train_slow_tcn_v2.py` other than this
+document. Treat that trainer as unverified code.
 
 Git history worth reading before you change anything:
 
@@ -272,17 +322,29 @@ docker ps --format "{{.Names}} {{.Status}}"   # wait for healthy
 
 The desktop suite is not affected by this work unless you touch the console.
 
-To inspect a trained checkpoint:
+To inspect a trained checkpoint, note that **the two lines write different
+filenames**:
 
 ```powershell
+# archived line (train_tcn.py) writes local_best.pt
 & ".\.venv\Scripts\python.exe" .\backend\tests\inspect_tcn_advisory.py `
   --checkpoint .\backend\reports\<run>\local_best.pt --device cpu
+
+# slow line (train_slow_tcn_v2.py) writes model.pt
+& ".\.venv\Scripts\python.exe" .\backend\tests\inspect_tcn_advisory.py `
+  --checkpoint .\backend\reports\<run>\model.pt --device cpu
 ```
 
 The advisor is designed to **refuse** a checkpoint that was not barrier-trained,
 lacks a reserved temporal test, lacks calibrated temperatures, or falls below
 the balanced-accuracy floor. A refusal is correct behaviour, not a bug to work
 around.
+
+Checked by reading the payload: `train_slow_tcn_v2.py` does write
+`direction_target_mode`, `direction_temperatures` and `test_evaluated`, which is
+what the advisor reads. So the schema is nominally compatible. Whether the
+numbers clear the 0.50 balanced-accuracy floor is the experiment's question, and
+the test window is only evaluated with `--evaluate-test`.
 
 ## 10. Non-negotiables
 
